@@ -5,78 +5,78 @@
   <img width="800" src="./figures/conecta_logo.png" alt="Conect2AI">
 </p>
 
-# Agentes Conversacionais Orientados por Ferramentas para Observabilidade de Infraestruturas com Prometheus na Borda (Raspberry Pi 5)
+# Agentic Observability for Edge AIoT Services: A Privacy-Preserving Local LLM and Prometheus
 
-### Autores: [Erick Justino](https://github.com/erickjustino), Mateus Araujo, [Marianne Silva](https://github.com/MarianneDiniz), [Dennis Brandão](https://scholar.google.com.br/citations?user=OxSKwvEAAAAJ&hl=pt-BR&authuser=1&oi=ao), Emiliano Sisinni, Paolo Ferrari e [Ivanovitch Silva](https://github.com/ivanovitchm)
+### Authors: [Erick Justino](https://github.com/erickjustino), Mateus Araujo, [Marianne Silva](https://github.com/MarianneDiniz), [Dennis Brandão](https://scholar.google.com.br/citations?user=OxSKwvEAAAAJ&hl=pt-BR&authuser=1&oi=ao), Emiliano Sisinni, Paolo Ferrari and [Ivanovitch Silva](https://github.com/ivanovitchm)
 
-Este repositório reúne a implementação de um agente conversacional para apoiar o
-monitoramento de infraestruturas computacionais a partir de perguntas em
-linguagem natural, executado **integralmente na borda**: LLM local (Ollama),
-agente (LangChain) e Prometheus rodam juntos em um **Raspberry Pi 5**.
+This repository contains the implementation of a conversational agent that
+supports the monitoring of computing infrastructures through natural-language
+questions, running **entirely at the edge**: the local LLM (Ollama), the agent
+(LangChain) and Prometheus all run together on a **Raspberry Pi 5**.
 
-A ideia principal é reduzir a dependência de consultas manuais em PromQL durante
-investigações operacionais. O operador faz perguntas sobre máquinas virtuais,
-contêineres, uso de CPU, memória, disco, rede ou anomalias, e o agente seleciona
-a ferramenta adequada, consulta o Prometheus e retorna uma resposta fundamentada
-nos dados observados — sem enviar métricas, topologias ou qualquer informação
-sensível da infraestrutura para provedores externos.
+The main goal is to reduce the dependence on manual PromQL queries during
+operational investigations. The operator asks questions about virtual machines,
+containers, CPU, memory, disk, network usage or anomalies, and the agent selects
+the appropriate tool, queries Prometheus and returns an answer grounded in the
+observed data — without sending metrics, topologies or any sensitive
+infrastructure information to external providers.
 
-Este código é a evolução, para o cenário de borda, do agente validado
-anteriormente em ambiente desktop (workstation com GPU). O porte para o
-Raspberry Pi 5 exigiu um conjunto de otimizações de latência, memória, escrita
-em disco e fidelidade que estão descritas neste README e no guia
+This code is the edge-scenario evolution of the agent previously validated in a
+desktop environment (GPU workstation). Porting it to the Raspberry Pi 5 required
+a set of latency, memory, disk-write and faithfulness optimizations that are
+described in this README and in the guide
 [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
 
-## Visão Geral
+## Overview
 
-A arquitetura experimental segue três módulos principais:
+The experimental architecture follows three main modules:
 
-1. **Instrumentação**: coleta de métricas em máquinas virtuais por meio do Node
-   Exporter e de métricas de contêineres por meio do cAdvisor.
-2. **Monitoramento**: armazenamento e consulta das séries temporais no
-   Prometheus, executado localmente no próprio Raspberry Pi 5, com tuning de
-   retenção, compressão de WAL e filtragem de métricas na ingestão.
-3. **Inteligência**: agente conversacional local baseado em LLM (`qwen3:4b-instruct`
-   por padrão), LangChain, Ollama e ferramentas Python assíncronas para consulta
-   e interpretação das métricas.
+1. **Instrumentation**: metric collection from virtual machines through Node
+   Exporter and from containers through cAdvisor.
+2. **Monitoring**: storage and querying of the time series in Prometheus,
+   running locally on the Raspberry Pi 5 itself, with retention tuning, WAL
+   compression and metric filtering at ingestion.
+3. **Intelligence**: local LLM-based conversational agent (`qwen3:4b-instruct`
+   by default), LangChain, Ollama and asynchronous Python tools for querying
+   and interpreting the metrics.
 
-O fluxo geral é:
+The overall flow is:
 
-1. O usuário envia uma pergunta em linguagem natural pela interface de linha de
-   comando.
-2. O modelo local interpreta a intenção e seleciona uma ferramenta, informando
-   o ambiente (`alvo`) e o recorte desejado (`foco`).
-3. A ferramenta dispara as consultas PromQL necessárias **em paralelo** no
-   Prometheus (com pool de conexões, retry e cache TTL).
-4. Os dados retornados são estruturados e resumidos em um payload enxuto; os
-   dados brutos completos vão para a telemetria em JSONL, não para o contexto
-   do modelo.
-5. O agente responde apenas com informações fundamentadas nas métricas
-   coletadas; guardas de fidelidade em tempo de execução detectam e bloqueiam
-   respostas com números não sustentados por uma execução de ferramenta.
+1. The user submits a natural-language question through the command-line
+   interface.
+2. The local model interprets the intent and selects a tool, providing the
+   environment (`alvo`, target) and the desired scope (`foco`, focus).
+3. The tool fires the required PromQL queries **in parallel** against
+   Prometheus (with connection pooling, retries and a TTL cache).
+4. The returned data is structured and summarized into a lean payload; the
+   complete raw data goes to the JSONL telemetry, not into the model context.
+5. The agent answers only with information grounded in the collected metrics;
+   runtime faithfulness guards detect and block answers containing numbers not
+   backed by a tool execution.
 
-## O que muda na versão edge
+## What changes in the edge version
 
-Em relação à versão desktop validada no artigo anterior, esta versão introduz:
+Compared to the desktop version validated in the previous paper, this version
+introduces:
 
-| Área | Mudança | Onde |
+| Area | Change | Where |
 | --- | --- | --- |
-| Coleta | Cliente HTTP assíncrono com pool keep-alive, semáforo de concorrência, retry com backoff e cache TTL com timestamps alinhados | `services/prometheus.py` |
-| Coleta | Consultas de cada avaliação de saúde disparadas em paralelo (`asyncio.gather`): a latência passa a ser a da query mais lenta, não a soma | `services/metrics.py` |
-| Contexto do LLM | Contrato de resposta enxuto das ferramentas (`status`, `foco`, `alvo`, `answer`); dados brutos saem do scratchpad e vão para a telemetria | `agent/tools.py` |
-| Fidelidade | Guarda de fidelidade na CLI: resposta com números sem nenhuma ferramenta executada dispara nova tentativa forçando ferramenta; se persistir, a resposta recebe um aviso explícito | `main.py` |
-| Fidelidade | Sanitização da memória conversacional: números são removidos do histórico salvo, impedindo que modelos pequenos reciclem métricas antigas em vez de coletar de novo | `agent/engine.py` |
-| Robustez | Desembrulho de argumentos de ferramenta malformados (formato `{"type": "string", "value": ...}` emitido por modelos instruct como o qwen3-instruct-2507), evitando uma rodada extra de LLM | `agent/tools.py` |
-| Robustez | Exceções tipadas (`AlvoInvalidoError`, `ParametroInvalidoError`) no lugar de comparação de strings de erro | `core/exceptions.py` |
-| Ferramentas | Parâmetro `foco` nas ferramentas de saúde (VM: geral/cpu/memoria/disco/rede; containers: geral/top/cpu/memoria/anomalias), montando apenas o resumo solicitado | `agent/tools.py` |
-| Ferramentas | Validação e sanitização de entradas: limites de janela/passo, limite de tamanho de PromQL cru, regex de nome de container restrita a caracteres seguros | `agent/tools.py` |
-| Inferência | Modelo padrão `qwen3:4b-instruct`, contexto de 2048 tokens, geração limitada a 512 tokens, 4 threads (núcleos do Pi 5), modelo residente em RAM (`keep_alive=-1`) e modo *thinking* desligado | `core/config.py`, `agent/engine.py` |
-| Telemetria | Registro automático de cada interação em JSONL: ferramentas, parâmetros, durações, dados brutos, tokens/s de prefill e decode, latências decompostas, temperatura e throttling do Pi | `telemetry/logger.py` |
-| Telemetria | Script de agregação da telemetria em CSV e estatísticas (média/mediana/p95) usando apenas a biblioteca padrão | `scripts/agregar_resultados.py` |
-| Testes | Testes funcionais executáveis **sem rede e sem Ollama**, com stubs de `httpx` e `langchain_core` | `tests/` |
-| Infra | Tuning do Prometheus nativo (retenção 3d/1GB, WAL comprimido, `metric_relabel_configs` para armazenar só as famílias consultadas) e override do Ollama (KV-cache q8_0, flash attention) | [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md) |
+| Collection | Asynchronous HTTP client with keep-alive pool, concurrency semaphore, retry with backoff and TTL cache with aligned timestamps | `services/prometheus.py` |
+| Collection | Queries of each health assessment fired in parallel (`asyncio.gather`): latency becomes that of the slowest query, not the sum | `services/metrics.py` |
+| LLM context | Lean tool response contract (`status`, `foco`, `alvo`, `answer`); raw data leaves the scratchpad and goes to telemetry | `agent/tools.py` |
+| Faithfulness | Faithfulness guard in the CLI: an answer with numbers but no tool executed triggers a retry that forces tool usage; if the issue persists, the answer is delivered with an explicit warning | `main.py` |
+| Faithfulness | Conversational-memory sanitization: numbers are stripped from the saved history, preventing small models from recycling old metrics instead of collecting again | `agent/engine.py` |
+| Robustness | Unwrapping of malformed tool arguments (the `{"type": "string", "value": ...}` format emitted by instruct models such as qwen3-instruct-2507), avoiding an extra LLM round | `agent/tools.py` |
+| Robustness | Typed exceptions (`AlvoInvalidoError`, `ParametroInvalidoError`) instead of error-string comparison | `core/exceptions.py` |
+| Tools | `foco` parameter on the health tools (VM: geral/cpu/memoria/disco/rede; containers: geral/top/cpu/memoria/anomalias), building only the requested summary | `agent/tools.py` |
+| Tools | Input validation and sanitization: window/step limits, raw PromQL length limit, container-name regex restricted to safe characters | `agent/tools.py` |
+| Inference | Default model `qwen3:4b-instruct`, 2048-token context, generation capped at 512 tokens, 4 threads (Pi 5 cores), model resident in RAM (`keep_alive=-1`) and *thinking* mode disabled | `core/config.py`, `agent/engine.py` |
+| Telemetry | Automatic logging of every interaction in JSONL: tools, parameters, durations, raw data, prefill and decode tokens/s, decomposed latencies, Pi temperature and throttling | `telemetry/logger.py` |
+| Telemetry | Telemetry aggregation script producing CSV and statistics (mean/median/p95) using only the standard library | `scripts/agregar_resultados.py` |
+| Tests | Functional tests runnable **without network and without Ollama**, using `httpx` and `langchain_core` stubs | `tests/` |
+| Infra | Native Prometheus tuning (3d/1GB retention, compressed WAL, `metric_relabel_configs` to store only the queried metric families) and Ollama override (q8_0 KV-cache, flash attention) | [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md) |
 
-## Estrutura do Repositório
+## Repository Structure
 
 ```text
 .
@@ -119,296 +119,297 @@ Em relação à versão desktop validada no artigo anterior, esta versão introd
 └── README.md
 ```
 
-## Arquivos
+## Files
 
-- `main.py`: interface de linha de comando do agente, com laço assíncrono de
-  conversação, acoplamento da telemetria e guarda de fidelidade das respostas.
-- `agent/engine.py`: criação lazy do LLM local, prompt, memória conversacional
-  com sanitização de números e executor LangChain.
-- `agent/prompt.py`: instruções de sistema, regras de uso das ferramentas e
-  restrições contra alucinação (calibradas experimentalmente).
-- `agent/tools.py`: ferramentas expostas ao agente (VM, contêineres, anomalias
-  e PromQL bruto), com validação de parâmetros, desembrulho de argumentos e
-  contrato de resposta enxuto.
-- `core/config.py`: variáveis de ambiente, limiares operacionais, catálogo de
-  alvos monitorados (com aliases) e validação de configuração na importação.
-- `core/exceptions.py`: exceções tipadas do agente.
-- `core/utils.py`: funções auxiliares de formatação, média, máximo e
-  classificação por limiar.
-- `services/prometheus.py`: cliente HTTP assíncrono para a API do Prometheus
-  (pool keep-alive, retry com backoff, limite de concorrência, cache TTL,
-  alinhamento de timestamps) e extratores de resultados.
-- `services/metrics.py`: consultas PromQL em paralelo e consolidação das
-  métricas de VM e contêineres, sem mascarar falhas de coleta como estado ok.
-- `telemetry/logger.py`: registro JSONL por interação (ferramentas, dados
-  brutos, tokens/s de prefill e decode, latências e sensores do Pi) via
-  callback do LangChain.
-- `scripts/agregar_resultados.py`: consolida a telemetria em CSV e imprime
-  estatísticas de resumo (latências e tokens/s).
-- `scripts/avaliar_protocolo.py`: avaliação automática do protocolo v2 —
-  cruza a telemetria com o gabarito e calcula Acc_t, F_resp, R_ctx e taxa de
-  retentativa por rodada, categoria e origem (v1 × v2).
-- `scripts/gabarito_v2.json`: gabarito legível por máquina do protocolo v2
-  (ferramenta, alvo, foco e comportamento esperados por pergunta).
-- `tests/test_porte_edge.py`: testes funcionais executáveis sem rede/Ollama
-  (com stubs em `tests/stubs/`).
-- `docs/RASPBERRY_PI.md`: guia completo de execução no Raspberry Pi 5.
-- `docs/TUTORIAL_PROTOCOLO_V2.md`: passo a passo para rodar e avaliar o
-  protocolo v2 no Raspberry Pi 5.
-- `perguntas-monitoramento.md`: protocolo de perguntas do artigo original (v1).
-- `perguntas-monitoramento-v2.md`: protocolo expandido de 80 perguntas usado
-  no experimento edge.
-- `requirements.txt`: dependências Python do projeto.
+- `main.py`: command-line interface of the agent, with the asynchronous
+  conversation loop, telemetry coupling and the answer faithfulness guard.
+- `agent/engine.py`: lazy creation of the local LLM, prompt, conversational
+  memory with number sanitization and the LangChain executor.
+- `agent/prompt.py`: system instructions, tool-usage rules and
+  anti-hallucination constraints (experimentally calibrated).
+- `agent/tools.py`: tools exposed to the agent (VM, containers, anomalies and
+  raw PromQL), with parameter validation, argument unwrapping and a lean
+  response contract.
+- `core/config.py`: environment variables, operational thresholds, catalog of
+  monitored targets (with aliases) and configuration validation at import time.
+- `core/exceptions.py`: typed exceptions of the agent.
+- `core/utils.py`: helper functions for formatting, mean, maximum and
+  threshold-based classification.
+- `services/prometheus.py`: asynchronous HTTP client for the Prometheus API
+  (keep-alive pool, retry with backoff, concurrency limit, TTL cache,
+  timestamp alignment) and result extractors.
+- `services/metrics.py`: parallel PromQL queries and consolidation of VM and
+  container metrics, without masking collection failures as an ok state.
+- `telemetry/logger.py`: per-interaction JSONL logging (tools, raw data,
+  prefill and decode tokens/s, latencies and Pi sensors) via a LangChain
+  callback.
+- `scripts/agregar_resultados.py`: consolidates the telemetry into CSV and
+  prints summary statistics (latencies and tokens/s).
+- `scripts/avaliar_protocolo.py`: automatic evaluation of protocol v2 —
+  cross-references the telemetry with the answer key and computes Acc_t,
+  F_resp, R_ctx and the retry rate per round, category and origin (v1 × v2).
+- `scripts/gabarito_v2.json`: machine-readable answer key of protocol v2
+  (expected tool, target, focus and behavior per question).
+- `tests/test_porte_edge.py`: functional tests runnable without network/Ollama
+  (with stubs in `tests/stubs/`).
+- `docs/RASPBERRY_PI.md`: complete guide for running on the Raspberry Pi 5.
+- `docs/TUTORIAL_PROTOCOLO_V2.md`: step-by-step guide to run and evaluate
+  protocol v2 on the Raspberry Pi 5.
+- `perguntas-monitoramento.md`: question protocol of the original paper (v1).
+- `perguntas-monitoramento-v2.md`: expanded 80-question protocol used in the
+  edge experiment.
+- `requirements.txt`: Python dependencies of the project.
 
-## Abordagem
+## Approach
 
-O agente foi projetado como uma camada interpretativa entre o operador e o
-Prometheus. Em vez de expor apenas valores brutos, o sistema organiza os dados
-em respostas curtas e operacionais, indicando estado geral, médias, picos e
-sinais de degradação.
+The agent was designed as an interpretive layer between the operator and
+Prometheus. Instead of exposing only raw values, the system organizes the data
+into short, operational answers, indicating overall state, averages, peaks and
+degradation signals.
 
-A execução local do modelo busca preservar a soberania dos dados operacionais,
-evitando o envio de métricas, topologias ou informações sensíveis da
-infraestrutura para provedores externos. No cenário de borda, todo o pipeline
-(coleta, armazenamento, inferência e resposta) reside no mesmo dispositivo.
+Running the model locally aims to preserve the sovereignty of operational data,
+avoiding sending metrics, topologies or sensitive infrastructure information to
+external providers. In the edge scenario, the entire pipeline (collection,
+storage, inference and answering) resides on the same device.
 
-### Mecanismos contra alucinação de métricas
+### Mechanisms against metric hallucination
 
-Modelos pequenos, viáveis em CPU ARM, tendem a "reciclar" números do histórico
-em vez de executar uma nova coleta. A versão edge combate isso em três camadas:
+Small models, viable on ARM CPUs, tend to "recycle" numbers from the history
+instead of executing a fresh collection. The edge version fights this in three
+layers:
 
-1. **Prompt de sistema**: proíbe explicitamente responder números sem executar
-   uma ferramenta na pergunta atual; o histórico serve apenas para herdar o
-   último ambiente mencionado.
-2. **Memória sem métricas** (`agent/engine.py`): antes de salvar um turno no
-   histórico, todas as linhas contendo dígitos são removidas e substituídas por
-   um marcador. Sem números no contexto, não há o que reciclar. A janela de
-   memória é curta (1 turno por padrão), o que também limita o crescimento do
-   KV-cache entre perguntas.
-3. **Guarda de fidelidade em tempo de execução** (`main.py`): se a resposta
-   final contém dígitos (ou imita o marcador do histórico) e a telemetria
-   registra **zero** ferramentas executadas na interação, o agente refaz a
-   pergunta exigindo o uso de ferramenta; se o problema persistir, a resposta é
-   entregue com um aviso de fidelidade explícito ao operador.
+1. **System prompt**: explicitly forbids answering with numbers without
+   executing a tool for the current question; the history is used only to
+   inherit the last mentioned environment.
+2. **Number-free memory** (`agent/engine.py`): before saving a turn to the
+   history, every line containing digits is removed and replaced by a marker.
+   With no numbers in the context, there is nothing to recycle. The memory
+   window is short (1 turn by default), which also limits KV-cache growth
+   between questions.
+3. **Runtime faithfulness guard** (`main.py`): if the final answer contains
+   digits (or mimics the history marker) and the telemetry records **zero**
+   tools executed in the interaction, the agent re-asks the question demanding
+   tool usage; if the problem persists, the answer is delivered with an
+   explicit faithfulness warning to the operator.
 
-### Payload enxuto e telemetria auditável
+### Lean payload and auditable telemetry
 
-As ferramentas devolvem ao LLM apenas `status`, `foco`, `alvo` e `answer` (o
-texto final já formatado). Os dados brutos das consultas **não** entram no
-contexto do modelo — são encaminhados ao módulo de telemetria, que os persiste
-em JSONL para auditoria de fidelidade. Isso reduz o consumo de contexto e o
-tempo de prefill, que é o gargalo dominante em CPU ARM, sem abrir mão da
-auditabilidade exigida pelo protocolo experimental.
+The tools return to the LLM only `status`, `foco`, `alvo` and `answer` (the
+final, already formatted text). The raw query data does **not** enter the model
+context — it is forwarded to the telemetry module, which persists it in JSONL
+for faithfulness auditing. This reduces context consumption and prefill time,
+the dominant bottleneck on ARM CPUs, without giving up the auditability
+required by the experimental protocol.
 
-### Ferramentas do Agente
+### Agent Tools
 
-| Ferramenta | Finalidade | Parâmetros principais |
+| Tool | Purpose | Main parameters |
 | --- | --- | --- |
-| `tool_obter_saude_vm` | Saúde geral ou métrica específica da máquina virtual. | `alvo`, `janela_segundos`, `foco` ∈ {geral, cpu, memoria, disco, rede} |
-| `tool_obter_saude_containers` | Saúde, CPU, memória, ranking e anomalias de contêineres. | `alvo`, `janela_segundos`, `regex_nome`, `foco` ∈ {geral, top, cpu, memoria, anomalias} |
-| `tool_detectar_anomalias` | Consolida sinais de alerta da VM e dos contêineres. | `alvo`, `janela_segundos` |
-| `prom_consulta_instantanea` | Executa PromQL cru usando `/api/v1/query`. | `promql` |
-| `prom_consulta_range` | Executa PromQL cru usando `/api/v1/query_range`. | `promql`, `janela_segundos`, `passo_segundos` |
+| `tool_obter_saude_vm` | Overall health or a specific metric of the virtual machine. | `alvo`, `janela_segundos`, `foco` ∈ {geral, cpu, memoria, disco, rede} |
+| `tool_obter_saude_containers` | Health, CPU, memory, ranking and anomalies of containers. | `alvo`, `janela_segundos`, `regex_nome`, `foco` ∈ {geral, top, cpu, memoria, anomalias} |
+| `tool_detectar_anomalias` | Consolidates warning signals from the VM and the containers. | `alvo`, `janela_segundos` |
+| `prom_consulta_instantanea` | Executes raw PromQL through `/api/v1/query`. | `promql` |
+| `prom_consulta_range` | Executes raw PromQL through `/api/v1/query_range`. | `promql`, `janela_segundos`, `passo_segundos` |
 
-Todas as ferramentas exigem o `alvo` explícito (`site` ou `testes`; aliases
-como `teste`, `homolog` e `homologação` são aceitos). Quando o alvo não pode
-ser determinado nem pela mensagem nem pelo histórico recente, o agente pergunta
-ao operador em vez de assumir um padrão. Entradas passam por validação de
-limites (janela máxima, passo máximo, tamanho máximo de PromQL) e a
-`regex_nome` de containers é sanitizada para um subconjunto seguro de
-caracteres antes de ser interpolada na consulta.
+All tools require an explicit target (`alvo`: `site` or `testes`; aliases such
+as `teste`, `homolog` and `homologação` are accepted). When the target cannot
+be determined from the message or the recent history, the agent asks the
+operator instead of assuming a default. Inputs go through limit validation
+(maximum window, maximum step, maximum PromQL length) and the container
+`regex_nome` is sanitized to a safe character subset before being interpolated
+into the query.
 
-### Métricas Consultadas
+### Queried Metrics
 
-| Recurso | Métricas Prometheus |
+| Resource | Prometheus metrics |
 | --- | --- |
-| CPU da VM | `node_cpu_seconds_total` |
-| Memória da VM | `node_memory_MemAvailable_bytes`, `node_memory_MemTotal_bytes` |
-| Disco da VM | `node_filesystem_avail_bytes`, `node_filesystem_size_bytes` |
-| Rede da VM | `node_network_receive_bytes_total`, `node_network_transmit_bytes_total`, `node_network_receive_errs_total`, `node_network_transmit_errs_total` |
-| CPU dos contêineres | `container_cpu_usage_seconds_total` |
-| Memória dos contêineres | `container_memory_usage_bytes` |
-| Estado recente dos contêineres | `container_last_seen` |
+| VM CPU | `node_cpu_seconds_total` |
+| VM memory | `node_memory_MemAvailable_bytes`, `node_memory_MemTotal_bytes` |
+| VM disk | `node_filesystem_avail_bytes`, `node_filesystem_size_bytes` |
+| VM network | `node_network_receive_bytes_total`, `node_network_transmit_bytes_total`, `node_network_receive_errs_total`, `node_network_transmit_errs_total` |
+| Container CPU | `container_cpu_usage_seconds_total` |
+| Container memory | `container_memory_usage_bytes` |
+| Recent container state | `container_last_seen` |
 
-No edge, o Prometheus é configurado para **armazenar somente essas famílias de
-métricas** (via `metric_relabel_configs` com `action: keep`), o que reduz
-drasticamente a ingestão do cAdvisor — que exporta centenas de séries por
-container — e poupa RAM e escrita no microSD. Ver
+At the edge, Prometheus is configured to **store only these metric families**
+(via `metric_relabel_configs` with `action: keep`), which drastically reduces
+cAdvisor ingestion — cAdvisor exports hundreds of series per container — and
+saves RAM and microSD writes. See
 [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
 
-## Telemetria do Experimento
+## Experiment Telemetry
 
-Com `TELEMETRY_ENABLED=true` (padrão), cada interação com o agente gera **uma
-linha JSON** append-only em `resultados/experimentos.jsonl`, contendo:
+With `TELEMETRY_ENABLED=true` (default), every interaction with the agent
+produces **one append-only JSON line** in `resultados/experimentos.jsonl`,
+containing:
 
-- pergunta, resposta final, erro (se houver) e latência fim-a-fim;
-- ferramentas acionadas, parâmetros e duração de cada uma (**Acc_t** auditável);
-- dados brutos retornados pelas consultas ao Prometheus (**F_resp** auditável);
-- métricas de inferência do Ollama por chamada de LLM (`prompt_eval_count`,
-  `eval_count` e durações), das quais derivam **prefill tokens/s** e
-  **decode tokens/s**;
-- temperatura da CPU (sysfs) e flags de throttling (`vcgencmd`) do Raspberry
-  Pi, quando disponíveis (**R_ctx** permanece auditável pelo histórico de
-  parâmetros entre linhas).
+- question, final answer, error (if any) and end-to-end latency;
+- triggered tools, parameters and duration of each one (auditable **Acc_t**);
+- raw data returned by the Prometheus queries (auditable **F_resp**);
+- Ollama inference metrics per LLM call (`prompt_eval_count`, `eval_count` and
+  durations), from which **prefill tokens/s** and **decode tokens/s** are
+  derived;
+- Raspberry Pi CPU temperature (sysfs) and throttling flags (`vcgencmd`), when
+  available (**R_ctx** remains auditable through the parameter history across
+  lines).
 
-O formato JSONL foi escolhido por ser resistente a quedas (cada linha é
-independente), gerar escrita sequencial mínima (preserva o microSD) e ser
-diretamente auditável.
+The JSONL format was chosen because it is crash-resistant (each line is
+independent), produces minimal sequential writes (preserving the microSD) and
+is directly auditable.
 
-Para consolidar a telemetria em CSV e estatísticas (média, mediana e p95 de
-latências e tokens/s):
+To consolidate the telemetry into CSV and statistics (mean, median and p95 of
+latencies and tokens/s):
 
 ```bash
 python scripts/agregar_resultados.py
 ```
 
-O script lê `resultados/experimentos.jsonl` por padrão e grava
-`resultados/resumo.csv` (aceita caminho do JSONL e `--csv` como argumentos).
+The script reads `resultados/experimentos.jsonl` by default and writes
+`resultados/resumo.csv` (it accepts the JSONL path and `--csv` as arguments).
 
-## Ambiente Experimental
+## Experimental Environment
 
-- **Edge (este repositório)**: Raspberry Pi 5 com 16 GB de RAM e AI Kit
-  (Hailo-8L), Raspberry Pi OS Lite 64-bit, Prometheus nativo local e modelo
-  `qwen3:4b-instruct` (Q4_K_M) via Ollama, inferência em CPU (4× Cortex-A76).
-  O Hailo-8L acelera CNNs de visão e não participa da inferência do LLM.
-- **Baseline desktop (artigo anterior)**: modelo `Qwen3:14b` via Ollama em uma
-  estação de trabalho com Intel Core i7, 64 GB de RAM e GPU NVIDIA GeForce
-  RTX 4070.
+- **Edge (this repository)**: Raspberry Pi 5 with 16 GB of RAM and the AI Kit
+  (Hailo-8L), Raspberry Pi OS Lite 64-bit, local native Prometheus and the
+  `qwen3:4b-instruct` model (Q4_K_M) via Ollama, CPU inference (4× Cortex-A76).
+  The Hailo-8L accelerates vision CNNs and does not take part in LLM inference.
+- **Desktop baseline (previous paper)**: `Qwen3:14b` model via Ollama on a
+  workstation with an Intel Core i7, 64 GB of RAM and an NVIDIA GeForce
+  RTX 4070 GPU.
 
-## Protocolo de Avaliação
+## Evaluation Protocol
 
-O experimento edge usa o **protocolo v2 de 80 perguntas**
-([perguntas-monitoramento-v2.md](perguntas-monitoramento-v2.md)): as 30
-perguntas do artigo original (v1, mantidas intactas como subconjunto para
-comparabilidade) mais 50 perguntas novas cobrindo os modos de falha
-observados no porte para a borda — anti-reciclagem de contexto, fora de
-escopo/recusa, ambiguidade e múltiplos alvos, robustez linguística,
-containers inexistentes, PromQL cru e cadeias longas de contexto.
+The edge experiment uses the **80-question protocol v2**
+([perguntas-monitoramento-v2.md](perguntas-monitoramento-v2.md)): the 30
+questions of the original paper (v1, kept intact as a subset for
+comparability) plus 50 new questions covering the failure modes observed in
+the edge port — context anti-recycling, out-of-scope/refusal, ambiguity and
+multiple targets, linguistic robustness, nonexistent containers, raw PromQL
+and long context chains.
 
-| Métrica | Definição |
+| Metric | Definition |
 | --- | --- |
-| `Acc_t` | Seleção correta da ferramenta e dos parâmetros para cada pergunta. |
-| `F_resp` | Fidelidade dos valores da resposta em relação aos dados brutos do Prometheus (tolerância de 5%). |
-| `R_ctx` | Retenção de contexto em interações multi-turno (herança do alvo). |
-| Retentativa | Interações que precisaram da nova tentativa automática da guarda de fidelidade (custo do modelo compacto no edge). |
+| `Acc_t` | Correct selection of the tool and parameters for each question. |
+| `F_resp` | Faithfulness of the answer values with respect to the raw Prometheus data (5% tolerance). |
+| `R_ctx` | Context retention in multi-turn interactions (target inheritance). |
+| Retry | Interactions that required the automatic retry of the faithfulness guard (the cost of the compact model at the edge). |
 
-A avaliação é automática: `scripts/avaliar_protocolo.py` cruza a telemetria
-JSONL com o gabarito (`scripts/gabarito_v2.json`) e emite os vereditos
-**PASS/FAIL/REVISAR** por rodada, categoria e origem (v1 × v2) — casos
-limítrofes recebem REVISAR e nunca contam como acerto sem auditoria manual
-no JSONL. O passo a passo completo (rodadas, sessões novas, critérios de
-validade e auditoria) está em
+The evaluation is automatic: `scripts/avaliar_protocolo.py` cross-references
+the JSONL telemetry with the answer key (`scripts/gabarito_v2.json`) and emits
+**PASS/FAIL/REVISAR** (review) verdicts per round, category and origin
+(v1 × v2) — borderline cases receive REVISAR and never count as correct
+without manual auditing of the JSONL. The complete step-by-step procedure
+(rounds, fresh sessions, validity criteria and auditing) is in
 [docs/TUTORIAL_PROTOCOLO_V2.md](docs/TUTORIAL_PROTOCOLO_V2.md).
 
-A telemetria JSONL torna as métricas auditáveis sem instrumentação manual e
-acrescenta os indicadores de desempenho do dispositivo (latência decomposta,
-tokens/s de prefill e decode, temperatura e throttling).
+The JSONL telemetry makes the metrics auditable without manual instrumentation
+and adds the device performance indicators (decomposed latency, prefill and
+decode tokens/s, temperature and throttling).
 
-### Resultados
+### Results
 
-*Os resultados dos experimentos serão adicionados em breve.*
+*The experiment results will be added soon.*
 
-## Como Rodar
+## How to Run
 
-### 1. Clonar o repositório
+### 1. Clone the repository
 
-Clone este repositório e acesse o diretório do projeto:
+Clone this repository and enter the project directory:
 
 ```bash
-git clone <URL_DO_REPOSITORIO>
+git clone <REPOSITORY_URL>
 cd projeto-agente
 ```
 
-### 2. Criar o ambiente Python
+### 2. Create the Python environment
 
-Crie o ambiente virtual, ative-o e instale as dependências:
+Create the virtual environment, activate it and install the dependencies:
 
 ```bash
 python -m venv .venv
 ```
 
-No Linux/macOS:
+On Linux/macOS:
 
 ```bash
 source .venv/bin/activate
 ```
 
-No Windows PowerShell:
+On Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-Depois, instale as dependências:
+Then install the dependencies:
 
 ```bash
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Após validar o ambiente (especialmente no Raspberry Pi), congele as versões
-exatas para reprodutibilidade:
+After validating the environment (especially on the Raspberry Pi), freeze the
+exact versions for reproducibility:
 
 ```bash
 pip freeze > requirements.lock.txt
 ```
 
-### 3. Instalar o Ollama e baixar o modelo
+### 3. Install Ollama and pull the model
 
-O projeto usa por padrão o modelo `qwen3:4b-instruct` (adequado ao edge):
+The project uses the `qwen3:4b-instruct` model by default (suited to the edge):
 
 ```bash
 ollama pull qwen3:4b-instruct
 ```
 
-Para usar outro modelo compatível com chamada de ferramentas (por exemplo, o
-`qwen3:14b` do baseline desktop), defina a variável de ambiente
-`OLLAMA_MODEL`.
+To use another tool-calling-capable model (for example, the `qwen3:14b` of the
+desktop baseline), set the `OLLAMA_MODEL` environment variable.
 
-### 4. Preparar o Prometheus
+### 4. Prepare Prometheus
 
-O agente espera encontrar o Prometheus em:
+The agent expects to find Prometheus at:
 
 ```text
 http://localhost:9090
 ```
 
-Se o Prometheus estiver em outro endereço, defina:
+If Prometheus is at another address, set:
 
-No Linux/macOS:
+On Linux/macOS:
 
 ```bash
-export PROMETHEUS_URL="http://SEU_HOST:9090"
+export PROMETHEUS_URL="http://YOUR_HOST:9090"
 ```
 
-No Windows PowerShell:
+On Windows PowerShell:
 
 ```powershell
-$env:PROMETHEUS_URL="http://SEU_HOST:9090"
+$env:PROMETHEUS_URL="http://YOUR_HOST:9090"
 ```
 
-Os alvos monitorados são definidos em `core/config.py`:
+The monitored targets are defined in `core/config.py`:
 
-| Alvo | Job Node Exporter | Job cAdvisor |
+| Target | Node Exporter job | cAdvisor job |
 | --- | --- | --- |
 | `site` | `vm_site_conect2ai` | `containers_vm_site_conect2ai` |
 | `testes` | `vm_testes` | `containers_vm_testes` |
 
-Esses nomes devem corresponder aos `job_name` configurados no `prometheus.yml`.
-O tuning do Prometheus para o edge (retenção, WAL, filtragem de métricas na
-ingestão e ajustes do cAdvisor nas VMs monitoradas) está documentado em
+These names must match the `job_name` entries configured in `prometheus.yml`.
+The edge tuning of Prometheus (retention, WAL, metric filtering at ingestion
+and cAdvisor adjustments on the monitored VMs) is documented in
 [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md).
 
-### 5. Executar o agente
+### 5. Run the agent
 
-Com o ambiente virtual ativo, o Ollama disponível e o Prometheus acessível,
-execute:
+With the virtual environment active, Ollama available and Prometheus
+reachable, run:
 
 ```bash
 python main.py
 ```
 
-A interface de linha de comando será iniciada:
+The command-line interface will start (output in Portuguese):
 
 ```text
 =====================================================
@@ -420,146 +421,147 @@ Digite 'sair' para encerrar.
 =====================================================
 ```
 
-Para encerrar, digite `sair` (ou `exit`/`quit`).
+To quit, type `sair` (or `exit`/`quit`).
 
-## Execução no Raspberry Pi 5 (Edge)
+## Running on the Raspberry Pi 5 (Edge)
 
-Os valores padrão do agente **já são os do Raspberry Pi 5** (`qwen3:4b-instruct`,
-Prometheus em `localhost:9090`, 4 threads de inferência, contexto de 2048
-tokens, telemetria ligada) — não é preciso definir variável de ambiente
-nenhuma para o cenário de borda. O guia
-[docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md) cobre o passo a passo completo:
+The agent defaults **are already the Raspberry Pi 5 ones** (`qwen3:4b-instruct`,
+Prometheus at `localhost:9090`, 4 inference threads, 2048-token context,
+telemetry enabled) — no environment variable needs to be set for the edge
+scenario. The guide [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md) covers the
+complete procedure:
 
-- preparação do sistema operacional (zram no lugar de swap em disco, `noatime`);
-- instalação do Ollama com override do systemd (KV-cache quantizado `q8_0`,
-  flash attention, um modelo por vez, modelo residente em RAM);
-- tuning do Prometheus nativo (retenção de 3 dias e 1 GB, WAL comprimido,
-  `scrape_interval` de 30s, `metric_relabel_configs` para armazenar apenas as
-  famílias de métricas consultadas pelo agente);
-- redução de carga do cAdvisor nas VMs monitoradas;
-- checklist de validação pós-porte, incluindo a reaplicação do protocolo de 30
-  perguntas e o acompanhamento de temperatura/throttling pela telemetria.
+- operating-system preparation (zram instead of disk swap, `noatime`);
+- Ollama installation with a systemd override (quantized `q8_0` KV-cache,
+  flash attention, one model at a time, model resident in RAM);
+- native Prometheus tuning (3-day/1 GB retention, compressed WAL, 30s
+  `scrape_interval`, `metric_relabel_configs` to store only the metric
+  families queried by the agent);
+- cAdvisor load reduction on the monitored VMs;
+- post-port validation checklist, including re-applying the 30-question
+  protocol and tracking temperature/throttling through the telemetry.
 
-## Testes
+## Tests
 
-Os testes funcionais do porte edge rodam **sem rede e sem Ollama**:
+The functional tests of the edge port run **without network and without
+Ollama**:
 
 ```bash
 python tests/test_porte_edge.py
 ```
 
-Quando `httpx` e `langchain_core` não estão instalados, o teste usa stubs
-mínimos incluídos em `tests/stubs/` (configuráveis pela variável de ambiente
-`STUBS_DIR`); com as dependências reais instaladas, os mesmos testes rodam
-contra elas. A suíte cobre resolução de alvos e aliases, validação de
-parâmetros e exceções tipadas, montagem das respostas das ferramentas, cliente
-Prometheus (cache, retry, extratores) e telemetria.
+When `httpx` and `langchain_core` are not installed, the tests use minimal
+stubs included in `tests/stubs/` (configurable through the `STUBS_DIR`
+environment variable); with the real dependencies installed, the same tests
+run against them. The suite covers target and alias resolution, parameter
+validation and typed exceptions, tool response assembly, the Prometheus client
+(cache, retry, extractors) and the telemetry.
 
-## Reprodutibilidade
+## Reproducibility
 
-Para reproduzir o experimento de borda, é necessário:
+To reproduce the edge experiment, you need to:
 
-1. Preparar o Raspberry Pi 5 conforme [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md)
-   (SO, Ollama, Prometheus local com tuning de edge).
-2. Configurar Node Exporter e cAdvisor nos ambientes monitorados e garantir que
-   os `job_name` do Prometheus correspondam aos alvos definidos em
+1. Prepare the Raspberry Pi 5 following [docs/RASPBERRY_PI.md](docs/RASPBERRY_PI.md)
+   (OS, Ollama, local Prometheus with edge tuning).
+2. Configure Node Exporter and cAdvisor on the monitored environments and make
+   sure the Prometheus `job_name` entries match the targets defined in
    `core/config.py`.
-3. Executar o agente com o modelo padrão `qwen3:4b-instruct` e a telemetria
-   ativa (padrão).
-4. Aplicar o protocolo v2 de 80 perguntas
-   ([perguntas-monitoramento-v2.md](perguntas-monitoramento-v2.md)) em 3 a 5
-   rodadas, seguindo [docs/TUTORIAL_PROTOCOLO_V2.md](docs/TUTORIAL_PROTOCOLO_V2.md)
-   (uma telemetria por rodada via `TELEMETRY_FILE`).
-5. Avaliar com `scripts/avaliar_protocolo.py resultados/rodada_*.jsonl`
-   (Acc_t, F_resp, R_ctx e retentativa por categoria), auditar manualmente os
-   casos REVISAR contra o JSONL e consolidar latências/tokens com
+3. Run the agent with the default `qwen3:4b-instruct` model and telemetry
+   enabled (default).
+4. Apply the 80-question protocol v2
+   ([perguntas-monitoramento-v2.md](perguntas-monitoramento-v2.md)) over 3 to
+   5 rounds, following [docs/TUTORIAL_PROTOCOLO_V2.md](docs/TUTORIAL_PROTOCOLO_V2.md)
+   (one telemetry file per round via `TELEMETRY_FILE`).
+5. Evaluate with `scripts/avaliar_protocolo.py resultados/rodada_*.jsonl`
+   (Acc_t, F_resp, R_ctx and retry rate per category), manually audit the
+   REVISAR cases against the JSONL and consolidate latencies/tokens with
    `scripts/agregar_resultados.py`.
 
-As respostas devem ser avaliadas considerando:
+Answers must be evaluated considering:
 
-- seleção correta da ferramenta e dos parâmetros (`Acc_t`);
-- fidelidade dos valores em relação aos dados brutos, com tolerância de 5%
+- correct selection of the tool and parameters (`Acc_t`);
+- faithfulness of the values with respect to the raw data, with 5% tolerance
   (`F_resp`);
-- manutenção de contexto em perguntas sequenciais (`R_ctx`);
-- ausência de métricas inventadas ou reutilizadas indevidamente do histórico;
-- desempenho no dispositivo: latência fim-a-fim, tokens/s de prefill e decode,
-  temperatura da CPU e ausência de throttling.
+- context retention across sequential questions (`R_ctx`);
+- absence of invented metrics or metrics improperly reused from the history;
+- on-device performance: end-to-end latency, prefill and decode tokens/s, CPU
+  temperature and absence of throttling.
 
-## Perguntas do Experimento
+## Experiment Questions
 
-Os protocolos de perguntas estão neste mesmo repositório:
+The question protocols are in this repository:
 
-- [perguntas-monitoramento-v2.md](perguntas-monitoramento-v2.md) — protocolo
-  de 80 perguntas do experimento edge (gabarito em
+- [perguntas-monitoramento-v2.md](perguntas-monitoramento-v2.md) — 80-question
+  protocol of the edge experiment (answer key in
   `scripts/gabarito_v2.json`);
-- [perguntas-monitoramento.md](perguntas-monitoramento.md) — protocolo de 30
-  perguntas do artigo original, mantido para referência.
+- [perguntas-monitoramento.md](perguntas-monitoramento.md) — 30-question
+  protocol of the original paper, kept for reference.
 
-## Configurações
+## Configuration
 
-As principais variáveis de ambiente aceitas pelo projeto (com os valores
-padrão da versão edge) são:
+The main environment variables accepted by the project (with the edge-version
+defaults) are:
 
-### Prometheus e consultas
+### Prometheus and queries
 
-| Variável | Valor padrão | Finalidade |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `PROMETHEUS_URL` | `http://localhost:9090` | URL da API do Prometheus. |
-| `PROMETHEUS_TIMEOUT_SECONDS` | `5` | Tempo máximo de espera nas consultas HTTP (falha rápida + retry). |
-| `PROMETHEUS_RETRIES` | `2` | Total de tentativas por consulta (timeout/conexão). |
-| `PROMETHEUS_RETRY_BACKOFF_SECONDS` | `0.5` | Espera entre tentativas de retry. |
-| `PROMETHEUS_MAX_CONCURRENT` | `4` | Limite de consultas simultâneas (não disputa CPU com o LLM). |
-| `PROMETHEUS_CACHE_TTL_SECONDS` | `30` | TTL do cache local de respostas (0 desativa). |
-| `PROMETHEUS_ALIGN_SECONDS` | `30` | Alinhamento de timestamps das consultas, para reuso de cache. |
-| `DEFAULT_WINDOW_SECONDS` | `300` | Janela padrão das consultas. |
-| `DEFAULT_STEP_SECONDS` | `30` | Passo padrão das consultas range (acompanha o scrape de 30s). |
-| `RATE_WINDOW` | `2m` | Janela interna de `rate()` (≥ 4× o scrape_interval). |
-| `MAX_WINDOW_SECONDS` | `3600` | Janela máxima permitida. |
-| `MAX_STEP_SECONDS` | `300` | Passo máximo permitido. |
-| `PROMQL_MAX_LENGTH` | `1200` | Tamanho máximo de uma consulta PromQL crua. |
+| `PROMETHEUS_URL` | `http://localhost:9090` | Prometheus API URL. |
+| `PROMETHEUS_TIMEOUT_SECONDS` | `5` | Maximum wait time for HTTP queries (fail fast + retry). |
+| `PROMETHEUS_RETRIES` | `2` | Total attempts per query (timeout/connection). |
+| `PROMETHEUS_RETRY_BACKOFF_SECONDS` | `0.5` | Wait between retry attempts. |
+| `PROMETHEUS_MAX_CONCURRENT` | `4` | Concurrent query limit (avoids competing with the LLM for CPU). |
+| `PROMETHEUS_CACHE_TTL_SECONDS` | `30` | Local response cache TTL (0 disables it). |
+| `PROMETHEUS_ALIGN_SECONDS` | `30` | Query timestamp alignment, for cache reuse. |
+| `DEFAULT_WINDOW_SECONDS` | `300` | Default query window. |
+| `DEFAULT_STEP_SECONDS` | `30` | Default step for range queries (matches the 30s scrape). |
+| `RATE_WINDOW` | `2m` | Internal `rate()` window (≥ 4× the scrape_interval). |
+| `MAX_WINDOW_SECONDS` | `3600` | Maximum allowed window. |
+| `MAX_STEP_SECONDS` | `300` | Maximum allowed step. |
+| `PROMQL_MAX_LENGTH` | `1200` | Maximum length of a raw PromQL query. |
 
-### Limiares e contêineres
+### Thresholds and containers
 
-| Variável | Valor padrão | Finalidade |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `CPU_WARN` / `CPU_CRIT` | `85.0` / `95.0` | Limiares de alerta e crítico para CPU (%). |
-| `MEM_WARN` / `MEM_CRIT` | `85.0` / `95.0` | Limiares de alerta e crítico para memória (%). |
-| `DISK_WARN` / `DISK_CRIT` | `85.0` / `95.0` | Limiares de alerta e crítico para disco (%). |
-| `NET_ERR_WARN` | `1.0` | Limiar de alerta para erros de rede. |
-| `CONTAINER_STALE_SECONDS` | `90` | Tempo para classificar um contêiner como inativo. |
-| `REGEX_NAME_MAX_LENGTH` | `80` | Tamanho máximo do filtro de nome de contêiner. |
+| `CPU_WARN` / `CPU_CRIT` | `85.0` / `95.0` | Warning and critical thresholds for CPU (%). |
+| `MEM_WARN` / `MEM_CRIT` | `85.0` / `95.0` | Warning and critical thresholds for memory (%). |
+| `DISK_WARN` / `DISK_CRIT` | `85.0` / `95.0` | Warning and critical thresholds for disk (%). |
+| `NET_ERR_WARN` | `1.0` | Warning threshold for network errors. |
+| `CONTAINER_STALE_SECONDS` | `90` | Time to classify a container as inactive. |
+| `REGEX_NAME_MAX_LENGTH` | `80` | Maximum length of the container name filter. |
 
-### LLM e agente
+### LLM and agent
 
-| Variável | Valor padrão | Finalidade |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `OLLAMA_MODEL` | `qwen3:4b-instruct` | Modelo local usado pelo agente (Q4_K_M, ~2,5 GB). |
-| `OLLAMA_BASE_URL` | *(vazio)* | URL do Ollama, se não for o padrão local. |
-| `OLLAMA_NUM_CTX` | `2048` | Tamanho do contexto do modelo. |
-| `OLLAMA_NUM_PREDICT` | `512` | Limite de tokens gerados por resposta. |
-| `OLLAMA_NUM_THREAD` | `4` | Threads de inferência (4 = núcleos do Pi 5; 0 = automático, recomendado fora do Pi). |
-| `OLLAMA_KEEP_ALIVE` | `-1` | Mantém o modelo residente em RAM entre perguntas. |
-| `OLLAMA_REASONING` | `false` | Modo *thinking* do qwen3 (desligado no edge; reative para reproduzir o desktop). |
-| `AGENT_VERBOSE` | `false` | Ativa ou desativa logs verbosos do executor. |
-| `AGENT_MAX_ITERATIONS` | `4` | Número máximo de iterações do agente por pergunta. |
-| `AGENT_MEMORY_WINDOW` | `1` | Janela de memória conversacional (turnos retidos, sem números). |
+| `OLLAMA_MODEL` | `qwen3:4b-instruct` | Local model used by the agent (Q4_K_M, ~2.5 GB). |
+| `OLLAMA_BASE_URL` | *(empty)* | Ollama URL, if not the local default. |
+| `OLLAMA_NUM_CTX` | `2048` | Model context size. |
+| `OLLAMA_NUM_PREDICT` | `512` | Token generation limit per answer. |
+| `OLLAMA_NUM_THREAD` | `4` | Inference threads (4 = Pi 5 cores; 0 = automatic, recommended off the Pi). |
+| `OLLAMA_KEEP_ALIVE` | `-1` | Keeps the model resident in RAM between questions. |
+| `OLLAMA_REASONING` | `false` | qwen3 *thinking* mode (disabled at the edge; re-enable to reproduce the desktop). |
+| `AGENT_VERBOSE` | `false` | Enables or disables verbose executor logs. |
+| `AGENT_MAX_ITERATIONS` | `4` | Maximum agent iterations per question. |
+| `AGENT_MEMORY_WINDOW` | `1` | Conversational memory window (retained turns, number-free). |
 
-### Telemetria
+### Telemetry
 
-| Variável | Valor padrão | Finalidade |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `TELEMETRY_ENABLED` | `true` | Grava a telemetria do experimento em JSONL. |
-| `TELEMETRY_FILE` | `resultados/experimentos.jsonl` | Caminho do arquivo de telemetria (relativo à raiz do projeto). |
+| `TELEMETRY_ENABLED` | `true` | Writes the experiment telemetry in JSONL. |
+| `TELEMETRY_FILE` | `resultados/experimentos.jsonl` | Telemetry file path (relative to the project root). |
 
-## Sobre o Conect2AI
+## About Conect2AI
 
-O **Conect2AI** é um grupo de pesquisa da **Universidade Federal do Rio Grande do
-Norte (UFRN)** voltado à aplicação de Inteligência Artificial e Aprendizado de
-Máquina em áreas como:
+**Conect2AI** is a research group at the **Federal University of Rio Grande do
+Norte (UFRN)** focused on applying Artificial Intelligence and Machine
+Learning to areas such as:
 
-- inteligência embarcada;
-- Internet das Coisas;
-- sistemas de transporte inteligentes;
-- observabilidade e monitoramento de infraestruturas computacionais.
+- embedded intelligence;
+- Internet of Things;
+- intelligent transportation systems;
+- observability and monitoring of computing infrastructures.
 
 Website: [http://conect2ai.dca.ufrn.br](http://conect2ai.dca.ufrn.br)
