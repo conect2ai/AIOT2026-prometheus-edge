@@ -1,9 +1,10 @@
-# Comunicação com APIs (Prometheus)
-requests>=2.31.0
+# Comunicação assíncrona com a API do Prometheus
+httpx>=0.27
 
-# Ecossistema LangChain e IA
-langchain>=0.1.0
-langchain-core>=0.1.0
-langchain-community>=0.0.1
-langchain-ollama>=0.0.1
+# Ecossistema LangChain e IA (somente os pacotes efetivamente importados)
+langchain-core>=0.3
+langchain-ollama>=0.3
 langchain-classic>=0.0.1
+
+# Após validar no Raspberry Pi, congele as versões exatas do ambiente:
+#   pip freeze > requirements.lock.txt

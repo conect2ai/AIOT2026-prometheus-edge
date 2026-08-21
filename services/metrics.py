@@ -1,17 +1,26 @@
+"""Consultas PromQL e consolidação das métricas de VM e contêineres.
+
+Todas as coletas são assíncronas: as consultas de cada avaliação de saúde
+são disparadas em paralelo (`asyncio.gather`), reduzindo a latência total
+de "soma das queries" para "a query mais lenta".
+"""
+
+import asyncio
 import time
 from typing import Any, Dict, List, Optional
 
 from core.config import (
-    JANELA_PADRAO_SEGUNDOS,
-    PASSO_PADRAO_SEGUNDOS,
+    ALINHAMENTO_SEGUNDOS,
+    CONTAINER_STALE_SEGUNDOS,
     CPU_AVISO,
     CPU_CRITICO,
-    MEM_AVISO,
-    MEM_CRITICO,
     DISCO_AVISO,
     DISCO_CRITICO,
     ERRO_REDE_AVISO,
-    CONTAINER_STALE_SEGUNDOS,
+    JANELA_RATE,
+    MEM_AVISO,
+    MEM_CRITICO,
+    PASSO_PADRAO_SEGUNDOS,
 )
 from core.utils import (
     formatar_bytes,
@@ -20,7 +29,17 @@ from core.utils import (
     nivel_por_limiar,
     media,
 )
-from services.prometheus import prom_get, extrair_vector, extrair_matrix, stats_serie
+from services.prometheus import (
+    alinhar_timestamp,
+    extrair_matrix,
+    extrair_vector,
+    prom_get,
+    stats_serie,
+)
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _erro_metricas(
@@ -60,11 +79,21 @@ def _normalizar_erro_prometheus(erro: Dict[str, Any], fonte: str) -> Dict[str, A
     )
 
 
-def executar_query_instantanea(promql: str) -> Dict[str, Any]:
+async def executar_query_instantanea(
+    promql: str,
+    momento: Optional[float] = None,
+) -> Dict[str, Any]:
     """
     Executa uma consulta instantânea no Prometheus (/api/v1/query).
+
+    O parâmetro `momento` fixa o instante de avaliação; quando omitido, usa
+    o timestamp atual alinhado, para que consultas repetidas dentro da mesma
+    janela sejam idênticas e aproveitem o cache.
     """
-    data = prom_get("/api/v1/query", {"query": promql})
+    if momento is None:
+        momento = alinhar_timestamp(time.time(), ALINHAMENTO_SEGUNDOS)
+
+    data = await prom_get("/api/v1/query", {"query": promql, "time": momento})
     erro = data.get("error")
 
     return {
@@ -72,27 +101,31 @@ def executar_query_instantanea(promql: str) -> Dict[str, Any]:
         "resultType": data.get("resultType"),
         "result": data.get("result", []),
         "error": erro,
+        "momento": momento,
     }
 
 
-def executar_query_range(
+async def executar_query_range(
     promql: str,
     janela_segundos: int,
     passo_segundos: int,
 ) -> Dict[str, Any]:
     """
     Executa uma consulta por intervalo no Prometheus (/api/v1/query_range).
+
+    Os limites da janela são alinhados ao passo para permitir reuso de cache.
     """
-    fim = time.time()
+    passo = int(passo_segundos)
+    fim = alinhar_timestamp(time.time(), passo)
     inicio = fim - int(janela_segundos)
 
-    data = prom_get(
+    data = await prom_get(
         "/api/v1/query_range",
         {
             "query": promql,
             "start": inicio,
             "end": fim,
-            "step": int(passo_segundos),
+            "step": passo,
         },
     )
 
@@ -145,6 +178,15 @@ def _stats_primeira_serie(obj: Dict[str, Any], nome_metrica: str) -> Dict[str, A
             ),
         }
 
+    if len(series) > 1:
+        # As consultas agregam com sum()/avg()/max() e deveriam retornar uma
+        # única série; mais de uma indica consulta ou labels inesperados.
+        logger.warning(
+            "Consulta '%s' retornou %d séries; apenas a primeira será usada.",
+            nome_metrica,
+            len(series),
+        )
+
     primeira_serie = series[0][1]
     if not primeira_serie:
         return {
@@ -167,7 +209,7 @@ def _stats_primeira_serie(obj: Dict[str, Any], nome_metrica: str) -> Dict[str, A
     }
 
 
-def _query_range_stats(
+async def _query_range_stats(
     promql: str,
     janela_segundos: int,
     nome_metrica: str,
@@ -175,7 +217,7 @@ def _query_range_stats(
     """
     Executa uma query range e devolve suas estatísticas básicas.
     """
-    resultado = executar_query_range(
+    resultado = await executar_query_range(
         promql=promql,
         janela_segundos=janela_segundos,
         passo_segundos=PASSO_PADRAO_SEGUNDOS,
@@ -273,47 +315,45 @@ def _erros_resultados_consulta(resultados: Dict[str, Dict[str, Any]]) -> List[Di
     return erros
 
 
-def obter_saude_vm(janela_segundos: int, job_node: str) -> Dict[str, Any]:
+async def obter_saude_vm(janela_segundos: int, job_node: str) -> Dict[str, Any]:
     """
     Avalia a saúde da VM a partir das métricas do Node Exporter.
+
+    As seis consultas são executadas em paralelo.
     """
-    cpu = _query_range_stats(
-        f'100 - (avg(rate(node_cpu_seconds_total{{job="{job_node}", mode="idle"}}[1m])) * 100)',
-        janela_segundos,
-        "vm_cpu",
-    )
+    consultas = [
+        (
+            "vm_cpu",
+            f'100 - (avg(rate(node_cpu_seconds_total{{job="{job_node}", mode="idle"}}[{JANELA_RATE}])) * 100)',
+        ),
+        (
+            "vm_memoria",
+            f'(1 - (node_memory_MemAvailable_bytes{{job="{job_node}"}} / node_memory_MemTotal_bytes{{job="{job_node}"}})) * 100',
+        ),
+        (
+            "vm_disco",
+            f'max(1 - (node_filesystem_avail_bytes{{job="{job_node}", fstype!~"tmpfs|overlay"}} / '
+            f'node_filesystem_size_bytes{{job="{job_node}", fstype!~"tmpfs|overlay"}})) * 100',
+        ),
+        (
+            "vm_rede_rx",
+            f'sum(rate(node_network_receive_bytes_total{{job="{job_node}", device!="lo"}}[{JANELA_RATE}]))',
+        ),
+        (
+            "vm_rede_tx",
+            f'sum(rate(node_network_transmit_bytes_total{{job="{job_node}", device!="lo"}}[{JANELA_RATE}]))',
+        ),
+        (
+            "vm_rede_erros",
+            f'sum(rate(node_network_receive_errs_total{{job="{job_node}", device!="lo"}}[{JANELA_RATE}]) + '
+            f'rate(node_network_transmit_errs_total{{job="{job_node}", device!="lo"}}[{JANELA_RATE}]))',
+        ),
+    ]
 
-    mem = _query_range_stats(
-        f'(1 - (node_memory_MemAvailable_bytes{{job="{job_node}"}} / node_memory_MemTotal_bytes{{job="{job_node}"}})) * 100',
-        janela_segundos,
-        "vm_memoria",
+    resultados = await asyncio.gather(
+        *(_query_range_stats(expr, janela_segundos, nome) for nome, expr in consultas)
     )
-
-    rx = _query_range_stats(
-        f'sum(rate(node_network_receive_bytes_total{{job="{job_node}", device!="lo"}}[1m]))',
-        janela_segundos,
-        "vm_rede_rx",
-    )
-
-    tx = _query_range_stats(
-        f'sum(rate(node_network_transmit_bytes_total{{job="{job_node}", device!="lo"}}[1m]))',
-        janela_segundos,
-        "vm_rede_tx",
-    )
-
-    err = _query_range_stats(
-        f'sum(rate(node_network_receive_errs_total{{job="{job_node}", device!="lo"}}[1m]) + '
-        f'rate(node_network_transmit_errs_total{{job="{job_node}", device!="lo"}}[1m]))',
-        janela_segundos,
-        "vm_rede_erros",
-    )
-
-    disk = _query_range_stats(
-        f'max(1 - (node_filesystem_avail_bytes{{job="{job_node}", fstype!~"tmpfs|overlay"}} / '
-        f'node_filesystem_size_bytes{{job="{job_node}", fstype!~"tmpfs|overlay"}})) * 100',
-        janela_segundos,
-        "vm_disco",
-    )
+    cpu, mem, disk, rx, tx, err = resultados
 
     nivel_cpu = nivel_por_limiar(cpu["max"], CPU_AVISO, CPU_CRITICO)
     nivel_mem = nivel_por_limiar(mem["max"], MEM_AVISO, MEM_CRITICO)
@@ -379,71 +419,72 @@ def obter_saude_vm(janela_segundos: int, job_node: str) -> Dict[str, Any]:
     }
 
 
-def obter_saude_containers(
+async def obter_saude_containers(
     janela_segundos: int,
     job_containers: str,
     regex_nome: str = ".*",
 ) -> Dict[str, Any]:
     """
     Avalia a saúde dos containers via cAdvisor usando a label 'name'.
-    """
-    cpu_pico = executar_query_instantanea(
-        f'max(max_over_time(rate(container_cpu_usage_seconds_total{{job="{job_containers}", name=~"{regex_nome}"}}[1m])[{janela_segundos}s:15s])) by (name)'
-    )
-    cpu_media = executar_query_instantanea(
-        f'max(avg_over_time(rate(container_cpu_usage_seconds_total{{job="{job_containers}", name=~"{regex_nome}"}}[1m])[{janela_segundos}s:15s])) by (name)'
-    )
-    mem_pico = executar_query_instantanea(
-        f'max(max_over_time(container_memory_usage_bytes{{job="{job_containers}", name=~"{regex_nome}"}}[{janela_segundos}s])) by (name)'
-    )
-    mem_media = executar_query_instantanea(
-        f'max(avg_over_time(container_memory_usage_bytes{{job="{job_containers}", name=~"{regex_nome}"}}[{janela_segundos}s])) by (name)'
-    )
-    last_seen = executar_query_instantanea(
-        f'max(container_last_seen{{job="{job_containers}", name=~"{regex_nome}"}}) by (name)'
-    )
 
-    resultados_consulta = {
-        "containers_cpu_pico": cpu_pico,
-        "containers_cpu_media": cpu_media,
-        "containers_memoria_pico": mem_pico,
-        "containers_memoria_media": mem_media,
-        "containers_last_seen": last_seen,
+    As cinco consultas instantâneas são executadas em paralelo, todas
+    avaliadas no mesmo instante alinhado (`momento`), o que garante
+    consistência entre as métricas e o cálculo de atraso.
+    """
+    momento = alinhar_timestamp(time.time(), ALINHAMENTO_SEGUNDOS)
+    passo = PASSO_PADRAO_SEGUNDOS
+
+    expressoes = {
+        "containers_cpu_pico": (
+            f'max(max_over_time(rate(container_cpu_usage_seconds_total{{job="{job_containers}", name=~"{regex_nome}"}}[{JANELA_RATE}])'
+            f'[{janela_segundos}s:{passo}s])) by (name)'
+        ),
+        "containers_cpu_media": (
+            f'max(avg_over_time(rate(container_cpu_usage_seconds_total{{job="{job_containers}", name=~"{regex_nome}"}}[{JANELA_RATE}])'
+            f'[{janela_segundos}s:{passo}s])) by (name)'
+        ),
+        "containers_memoria_pico": (
+            f'max(max_over_time(container_memory_usage_bytes{{job="{job_containers}", name=~"{regex_nome}"}}[{janela_segundos}s])) by (name)'
+        ),
+        "containers_memoria_media": (
+            f'max(avg_over_time(container_memory_usage_bytes{{job="{job_containers}", name=~"{regex_nome}"}}[{janela_segundos}s])) by (name)'
+        ),
+        "containers_last_seen": (
+            f'max(container_last_seen{{job="{job_containers}", name=~"{regex_nome}"}}) by (name)'
+        ),
     }
+
+    nomes_consultas = list(expressoes.keys())
+    respostas = await asyncio.gather(
+        *(executar_query_instantanea(expressoes[nome], momento=momento) for nome in nomes_consultas)
+    )
+    resultados_consulta = dict(zip(nomes_consultas, respostas))
+
     erros = _erros_resultados_consulta(resultados_consulta)
 
-    mapa_cpu_pico = _mapa_por_nome(cpu_pico)
-    mapa_cpu_media = _mapa_por_nome(cpu_media)
-    mapa_mem_pico = _mapa_por_nome(mem_pico)
-    mapa_mem_media = _mapa_por_nome(mem_media)
-    mapa_last_seen = _mapa_por_nome(last_seen)
+    mapa_cpu_pico = _mapa_por_nome(resultados_consulta["containers_cpu_pico"])
+    mapa_cpu_media = _mapa_por_nome(resultados_consulta["containers_cpu_media"])
+    mapa_mem_pico = _mapa_por_nome(resultados_consulta["containers_memoria_pico"])
+    mapa_mem_media = _mapa_por_nome(resultados_consulta["containers_memoria_media"])
+    mapa_last_seen = _mapa_por_nome(resultados_consulta["containers_last_seen"])
 
     nomes = sorted(
-        set(
-            list(mapa_cpu_pico.keys())
-            + list(mapa_cpu_media.keys())
-            + list(mapa_mem_pico.keys())
-            + list(mapa_mem_media.keys())
-            + list(mapa_last_seen.keys())
-        )
+        set(mapa_cpu_pico)
+        | set(mapa_cpu_media)
+        | set(mapa_mem_pico)
+        | set(mapa_mem_media)
+        | set(mapa_last_seen)
     )
 
-    agora = time.time()
     containers: List[Dict[str, Any]] = []
 
     for nome in nomes:
-        status = "up"
-
         if nome in mapa_last_seen:
-            atraso = agora - mapa_last_seen[nome]
-            if atraso > CONTAINER_STALE_SEGUNDOS:
-                status = "stale"
+            atraso: Optional[float] = max(0.0, momento - mapa_last_seen[nome])
+            status = "stale" if atraso > CONTAINER_STALE_SEGUNDOS else "up"
         else:
             atraso = None
             status = "unknown"
-
-        if nome in mapa_last_seen and status != "stale":
-            atraso = agora - mapa_last_seen[nome]
 
         containers.append(
             {
@@ -527,18 +568,19 @@ def obter_saude_containers(
     }
 
 
-def detectar_anomalias(
+async def detectar_anomalias(
     janela_segundos: int,
     job_node: str,
     job_containers: str,
 ) -> Dict[str, Any]:
     """
     Gera um relatório focado apenas em anomalias e desvios relevantes.
+
+    As avaliações de VM e de containers são executadas em paralelo.
     """
-    vm = obter_saude_vm(janela_segundos, job_node=job_node)
-    cont = obter_saude_containers(
-        janela_segundos,
-        job_containers=job_containers,
+    vm, cont = await asyncio.gather(
+        obter_saude_vm(janela_segundos, job_node=job_node),
+        obter_saude_containers(janela_segundos, job_containers=job_containers),
     )
 
     anomalias: List[Dict[str, Any]] = []

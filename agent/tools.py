@@ -1,3 +1,14 @@
+"""Ferramentas expostas ao agente.
+
+Contrato de resposta (enxuto, pensado para inferência em edge):
+as ferramentas devolvem ao LLM apenas `status`, `foco`, `alvo` e `answer`
+(o texto final já formatado). Os dados brutos das consultas NÃO entram no
+scratchpad do modelo — eles são encaminhados ao módulo de telemetria, que
+os persiste em JSONL para auditoria de fidelidade (F_resp). Isso reduz o
+consumo de contexto (KV-cache) e o tempo de prefill em CPU ARM.
+"""
+
+import logging
 import re
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +23,7 @@ from core.config import (
     REGEX_NOME_MAX_CARACTERES,
     resolver_alvo,
 )
+from core.exceptions import AlvoInvalidoError, ParametroInvalidoError
 from services.metrics import (
     detectar_anomalias,
     executar_query_instantanea,
@@ -19,7 +31,9 @@ from services.metrics import (
     obter_saude_containers,
     obter_saude_vm,
 )
+from telemetry import registrar_dados_brutos
 
+logger = logging.getLogger(__name__)
 
 FOCOS_VM = {"geral", "cpu", "memoria", "disco", "rede"}
 FOCOS_CONTAINERS = {"geral", "top", "cpu", "memoria", "anomalias"}
@@ -38,33 +52,100 @@ FOCOS_ALIASES = {
 }
 TERMOS_NAO_SERVICO = {"cpu", "memoria", "memória", "disco", "rede", "ram"}
 
+_MAX_SERIES_PROMQL_ANSWER = 10
 
-def _resposta_canonica(
+# =========================================================
+# SCHEMAS DE ARGUMENTOS (tolerantes a argumentos embrulhados)
+# =========================================================
+# Alguns modelos instruct (ex.: qwen3-instruct-2507) chamam ferramentas com
+# argumentos embrulhados no formato {"type": "string", "value": "testes"} em
+# vez do valor direto. O model_validator abaixo desembrulha esse formato antes
+# da validacao, evitando ValidationError e uma rodada extra de LLM no edge.
+try:
+    from pydantic import BaseModel, model_validator
+except ImportError:
+    BaseModel = None
+
+if BaseModel is not None:
+    def _desembrulhar_argumento(valor: Any) -> Any:
+        """Extrai o valor real de um argumento embrulhado pelo modelo.
+
+        Formatos observados no qwen3-instruct:
+        - {"type": "string", "value": "testes"}  -> "testes"
+        - {"site": "site"} (dict de uma entrada) -> "site"
+        """
+        if isinstance(valor, dict):
+            if "value" in valor:
+                return _desembrulhar_argumento(valor["value"])
+            if len(valor) == 1:
+                return _desembrulhar_argumento(next(iter(valor.values())))
+        return valor
+
+    class _ArgsBase(BaseModel):
+        @model_validator(mode="before")
+        @classmethod
+        def _desembrulhar_valores(cls, dados: Any) -> Any:
+            if isinstance(dados, dict):
+                return {
+                    chave: _desembrulhar_argumento(valor)
+                    for chave, valor in dados.items()
+                }
+            return dados
+
+    class ArgsPromInstantanea(_ArgsBase):
+        promql: str
+
+    class ArgsPromRange(_ArgsBase):
+        promql: str
+        janela_segundos: int = JANELA_PADRAO_SEGUNDOS
+        passo_segundos: int = PASSO_PADRAO_SEGUNDOS
+
+    class ArgsSaudeVM(_ArgsBase):
+        alvo: Optional[str] = None
+        janela_segundos: int = JANELA_PADRAO_SEGUNDOS
+        foco: str = "geral"
+
+    class ArgsSaudeContainers(_ArgsBase):
+        alvo: Optional[str] = None
+        janela_segundos: int = JANELA_PADRAO_SEGUNDOS
+        regex_nome: str = ".*"
+        foco: str = "geral"
+
+    class ArgsDetectarAnomalias(_ArgsBase):
+        alvo: Optional[str] = None
+        janela_segundos: int = JANELA_PADRAO_SEGUNDOS
+
+    _ARGS_SCHEMAS = {
+        "prom_consulta_instantanea": ArgsPromInstantanea,
+        "prom_consulta_range": ArgsPromRange,
+        "tool_obter_saude_vm": ArgsSaudeVM,
+        "tool_obter_saude_containers": ArgsSaudeContainers,
+        "tool_detectar_anomalias": ArgsDetectarAnomalias,
+    }
+else:
+    _ARGS_SCHEMAS = {}
+
+
+
+# =========================================================
+# CONTRATO DE RESPOSTA (ENXUTO)
+# =========================================================
+def _resposta_llm(
     status: str,
     foco: str,
     answer: str,
-    data: Optional[Dict[str, Any]] = None,
-    errors: Optional[List[Dict[str, Any]]] = None,
     alvo: Optional[str] = None,
-    tipo: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Contrato único para ferramentas: resposta pronta, dados brutos e erros separados.
+    Contrato único das ferramentas: somente o necessário para o LLM.
     """
     resposta: Dict[str, Any] = {
         "status": status,
         "foco": foco,
         "answer": answer,
-        "data": data or {},
-        "errors": errors or [],
     }
-
     if alvo:
         resposta["alvo"] = alvo
-
-    if tipo:
-        resposta["tipo"] = tipo
-
     return resposta
 
 
@@ -72,19 +153,11 @@ def _erro_alvo(detalhe: str) -> Dict[str, Any]:
     """
     Retorno padronizado para alvo ausente ou inválido.
     """
-    erro = {
-        "tipo": "alvo_nao_informado_ou_invalido",
-        "fonte": "entrada_usuario",
-        "mensagem": "Ambiente ausente ou inválido.",
-        "detalhe": detalhe,
-    }
-    return _resposta_canonica(
+    logger.info("Alvo ausente ou inválido: %s", detalhe)
+    return _resposta_llm(
         status="error",
         foco="alvo",
         answer="Qual ambiente você deseja consultar: site ou testes?",
-        data={"opcoes": ["site", "testes"]},
-        errors=[erro],
-        tipo="alvo_nao_informado_ou_invalido",
     )
 
 
@@ -92,18 +165,11 @@ def _erro_validacao(campo: str, detalhe: str) -> Dict[str, Any]:
     """
     Retorno padronizado para parâmetros inseguros ou fora dos limites.
     """
-    erro = {
-        "tipo": "parametro_invalido",
-        "fonte": campo,
-        "mensagem": "Parâmetro inválido ou fora dos limites aceitos.",
-        "detalhe": detalhe,
-    }
-    return _resposta_canonica(
+    logger.info("Parâmetro inválido em %s: %s", campo, detalhe)
+    return _resposta_llm(
         status="error",
         foco="validacao",
         answer=f"Parâmetro inválido: {campo}. {detalhe}",
-        errors=[erro],
-        tipo="parametro_invalido",
     )
 
 
@@ -111,42 +177,28 @@ def _erro_execucao(mensagem: str, detalhe: str, foco: str = "execucao") -> Dict[
     """
     Retorno padronizado para erros reais de execução.
     """
-    erro = {
-        "tipo": "erro_execucao",
-        "fonte": foco,
-        "mensagem": mensagem,
-        "detalhe": detalhe,
-    }
-    return _resposta_canonica(
+    logger.error("Erro de execução em %s: %s (%s)", foco, mensagem, detalhe)
+    return _resposta_llm(
         status="error",
         foco=foco,
-        answer=mensagem,
-        errors=[erro],
-        tipo="erro_execucao",
+        answer=f"{mensagem} Detalhe técnico: {detalhe}",
     )
 
 
-def _resolver_alvo_seguro(alvo: Optional[str]) -> Dict[str, Any]:
-    """
-    Resolve o alvo e transforma falha em ValueError semântico.
-    """
-    try:
-        return resolver_alvo(alvo)
-    except Exception as e:
-        raise ValueError(str(e)) from e
-
-
+# =========================================================
+# VALIDAÇÃO DE PARÂMETROS
+# =========================================================
 def _validar_janela(janela_segundos: int) -> int:
     try:
         janela = int(janela_segundos)
     except (TypeError, ValueError) as e:
-        raise ValueError("janela_segundos deve ser um número inteiro.") from e
+        raise ParametroInvalidoError("janela_segundos deve ser um número inteiro.") from e
 
     if janela < 1:
-        raise ValueError("janela_segundos deve ser maior ou igual a 1.")
+        raise ParametroInvalidoError("janela_segundos deve ser maior ou igual a 1.")
 
     if janela > JANELA_MAXIMA_SEGUNDOS:
-        raise ValueError(
+        raise ParametroInvalidoError(
             f"janela_segundos não pode exceder {JANELA_MAXIMA_SEGUNDOS} segundos."
         )
 
@@ -157,42 +209,46 @@ def _validar_passo(passo_segundos: int, janela_segundos: int) -> int:
     try:
         passo = int(passo_segundos)
     except (TypeError, ValueError) as e:
-        raise ValueError("passo_segundos deve ser um número inteiro.") from e
+        raise ParametroInvalidoError("passo_segundos deve ser um número inteiro.") from e
 
     if passo < 1:
-        raise ValueError("passo_segundos deve ser maior ou igual a 1.")
+        raise ParametroInvalidoError("passo_segundos deve ser maior ou igual a 1.")
 
     if passo > PASSO_MAXIMO_SEGUNDOS:
-        raise ValueError(
+        raise ParametroInvalidoError(
             f"passo_segundos não pode exceder {PASSO_MAXIMO_SEGUNDOS} segundos."
         )
 
     if passo > janela_segundos:
-        raise ValueError("passo_segundos não pode ser maior que janela_segundos.")
+        raise ParametroInvalidoError("passo_segundos não pode ser maior que janela_segundos.")
 
     return passo
 
 
 def _validar_promql(promql: str) -> str:
     if not isinstance(promql, str):
-        raise ValueError("promql deve ser texto.")
+        raise ParametroInvalidoError("promql deve ser texto.")
 
     consulta = promql.strip()
     if not consulta:
-        raise ValueError("promql não pode estar vazio.")
+        raise ParametroInvalidoError("promql não pode estar vazio.")
 
     if len(consulta) > PROMQL_MAX_CARACTERES:
-        raise ValueError(f"promql não pode exceder {PROMQL_MAX_CARACTERES} caracteres.")
+        raise ParametroInvalidoError(
+            f"promql não pode exceder {PROMQL_MAX_CARACTERES} caracteres."
+        )
 
     if any(ch in consulta for ch in [";", "\n", "\r", "\x00"]):
-        raise ValueError("promql contém caracteres não permitidos para consulta crua.")
+        raise ParametroInvalidoError(
+            "promql contém caracteres não permitidos para consulta crua."
+        )
 
     return consulta
 
 
 def _normalizar_foco(
     foco: Optional[str],
-    permitidos: set[str],
+    permitidos: set,
     padrao: str = "geral",
 ) -> str:
     valor = str(foco or padrao).strip().lower()
@@ -200,7 +256,7 @@ def _normalizar_foco(
 
     if valor not in permitidos:
         opcoes = ", ".join(sorted(permitidos))
-        raise ValueError(f"foco inválido '{valor}'. Opções válidas: {opcoes}.")
+        raise ParametroInvalidoError(f"foco inválido '{valor}'. Opções válidas: {opcoes}.")
 
     return valor
 
@@ -215,7 +271,7 @@ def _sanitizar_regex_nome(regex_nome: str = ".*") -> str:
         return valor
 
     if len(valor) > REGEX_NOME_MAX_CARACTERES:
-        raise ValueError(
+        raise ParametroInvalidoError(
             f"regex_nome não pode exceder {REGEX_NOME_MAX_CARACTERES} caracteres."
         )
 
@@ -226,16 +282,21 @@ def _sanitizar_regex_nome(regex_nome: str = ".*") -> str:
     valor_normalizado = valor.lower()
 
     if valor_normalizado in TERMOS_NAO_SERVICO:
-        raise ValueError("regex_nome deve representar um serviço/container, não uma métrica.")
+        raise ParametroInvalidoError(
+            "regex_nome deve representar um serviço/container, não uma métrica."
+        )
 
     if not re.fullmatch(r"[A-Za-z0-9_.:-]+", valor):
-        raise ValueError(
+        raise ParametroInvalidoError(
             "regex_nome aceita apenas letras, números, ponto, hífen, underscore e dois-pontos."
         )
 
     return f".*{re.escape(valor)}.*"
 
 
+# =========================================================
+# APOIO À MONTAGEM DAS RESPOSTAS
+# =========================================================
 def _erros_promql(resultado: Dict[str, Any], fonte: str) -> List[Dict[str, Any]]:
     erro = resultado.get("error")
     if not erro:
@@ -281,6 +342,9 @@ def _linhas_erros(errors: List[Dict[str, Any]]) -> List[str]:
     return linhas
 
 
+# ---------------------------------------------------------
+# VM
+# ---------------------------------------------------------
 def _linha_vm_percentual(nome: str, dados: Dict[str, Any]) -> str:
     return (
         f"{nome}: nível={dados.get('nivel', 'unknown')}, "
@@ -324,62 +388,9 @@ def _montar_answer_vm(resultado: Dict[str, Any], alvo: str, foco: str) -> str:
     return "\n".join(linhas)
 
 
-def _formatar_top_cpu(top_cpu: List[Dict[str, Any]], limite: int = 3) -> List[str]:
-    linhas = []
-    for item in top_cpu[:limite]:
-        nome = item.get("nome", "desconhecido")
-        valor = item.get("cpu_pico_fmt") or str(item.get("cpu_pico_cores", "n/a"))
-        linhas.append(f"{nome}: {valor}")
-    return linhas
-
-
-def _formatar_top_memoria(top_memoria: List[Dict[str, Any]], limite: int = 3) -> List[str]:
-    linhas = []
-    for item in top_memoria[:limite]:
-        nome = item.get("nome", "desconhecido")
-        valor = item.get("mem_pico_fmt") or str(item.get("mem_pico_bytes", "n/a"))
-        linhas.append(f"{nome}: {valor}")
-    return linhas
-
-
-def _formatar_todos_containers(detalhes: List[Dict[str, Any]]) -> List[str]:
-    linhas = []
-    for item in detalhes:
-        nome = item.get("nome", "desconhecido")
-        status = item.get("status", "unknown")
-        cpu_pico = item.get("cpu_pico_fmt", "n/a")
-        cpu_media = item.get("cpu_media_fmt", "n/a")
-        mem_pico = item.get("mem_pico_fmt", "n/a")
-        mem_media = item.get("mem_media_fmt", "n/a")
-
-        linhas.append(
-            f"{nome} | status={status} | "
-            f"CPU pico={cpu_pico}, média={cpu_media} | "
-            f"Memória pico={mem_pico}, média={mem_media}"
-        )
-    return linhas
-
-
-def _formatar_cpu_containers(detalhes: List[Dict[str, Any]]) -> List[str]:
-    linhas = []
-    for item in detalhes:
-        nome = item.get("nome", "desconhecido")
-        cpu_pico = item.get("cpu_pico_fmt", "n/a")
-        cpu_media = item.get("cpu_media_fmt", "n/a")
-        linhas.append(f"{nome}: pico={cpu_pico}, média={cpu_media}")
-    return linhas
-
-
-def _formatar_memoria_containers(detalhes: List[Dict[str, Any]]) -> List[str]:
-    linhas = []
-    for item in detalhes:
-        nome = item.get("nome", "desconhecido")
-        mem_pico = item.get("mem_pico_fmt", "n/a")
-        mem_media = item.get("mem_media_fmt", "n/a")
-        linhas.append(f"{nome}: pico={mem_pico}, média={mem_media}")
-    return linhas
-
-
+# ---------------------------------------------------------
+# CONTAINERS (somente o foco solicitado é montado)
+# ---------------------------------------------------------
 def _prefixo_containers(resultado: Dict[str, Any], alvo: str) -> List[str]:
     linhas = [
         f"Máquina do {alvo}:",
@@ -391,125 +402,187 @@ def _prefixo_containers(resultado: Dict[str, Any], alvo: str) -> List[str]:
     return linhas
 
 
-def _montar_resumo_containers(resultado: Dict[str, Any], alvo: str) -> Dict[str, Any]:
-    total = resultado.get("total_encontrados", 0)
-    stale = resultado.get("stale", [])
-    unknown = resultado.get("unknown", [])
-    top_cpu = resultado.get("top_cpu", [])
-    top_memoria = resultado.get("top_memoria", [])
-    media_geral = resultado.get("media_geral", {})
-    detalhes = resultado.get("detalhes", [])
-    errors = resultado.get("errors", [])
+def _linha_stale(resultado: Dict[str, Any]) -> str:
+    if resultado.get("stale"):
+        return "Há containers inativos/travados."
+    return "Nenhum container inativo foi detectado."
 
-    stale_txt = "Há containers inativos/travados." if stale else "Nenhum container inativo foi detectado."
-    unknown_txt = "Há containers com estado desconhecido." if unknown else "Nenhum container com estado desconhecido foi detectado."
 
-    top_cpu_linhas = _formatar_top_cpu(top_cpu, limite=3)
-    top_memoria_linhas = _formatar_top_memoria(top_memoria, limite=3)
-    todos_containers_linhas = _formatar_todos_containers(detalhes)
-    cpu_containers_linhas = _formatar_cpu_containers(detalhes)
-    memoria_containers_linhas = _formatar_memoria_containers(detalhes)
+def _linha_unknown(resultado: Dict[str, Any]) -> str:
+    if resultado.get("unknown"):
+        return "Há containers com estado desconhecido."
+    return "Nenhum container com estado desconhecido foi detectado."
 
-    cpu_media_fmt = media_geral.get("cpu_media_fmt", "n/a")
-    mem_media_fmt = media_geral.get("mem_media_fmt", "n/a")
 
-    atraso_medio = None
+def _linha_atraso(resultado: Dict[str, Any]) -> Optional[str]:
     atrasos = [
         c.get("atraso_segundos")
-        for c in detalhes
+        for c in resultado.get("detalhes", [])
         if c.get("atraso_segundos") is not None
     ]
-    if atrasos:
-        atraso_medio = sum(atrasos) / len(atrasos)
+    if not atrasos:
+        return None
+    atraso_medio = sum(atrasos) / len(atrasos)
+    return f"Atraso desde a última observação: ~{atraso_medio:.2f} s"
 
-    atraso_txt = (
-        f"Atraso desde a última observação: ~{atraso_medio:.2f} s"
-        if atraso_medio is not None
-        else "Atraso desde a última observação: n/a"
+
+def _linhas_metricas_containers(
+    detalhes: List[Dict[str, Any]],
+    campos: List[str],
+    rotulos: List[str],
+) -> List[str]:
+    """
+    Formata uma linha por container com os campos/rótulos solicitados.
+    """
+    linhas = []
+    for item in detalhes:
+        nome = item.get("nome", "desconhecido")
+        partes = [
+            f"{rotulo}={item.get(campo, 'n/a')}"
+            for campo, rotulo in zip(campos, rotulos)
+        ]
+        linhas.append(f"{nome}: {', '.join(partes)}")
+    return linhas
+
+
+def _linhas_media_geral(resultado: Dict[str, Any], incluir: str = "ambas") -> List[str]:
+    media_geral = resultado.get("media_geral", {})
+    cpu_fmt = media_geral.get("cpu_media_fmt", "n/a")
+    mem_fmt = media_geral.get("mem_media_fmt", "n/a")
+
+    if incluir == "cpu":
+        return ["", f"Média geral de CPU: {cpu_fmt}"]
+    if incluir == "memoria":
+        return ["", f"Média geral de memória: {mem_fmt}"]
+    return ["", "Média geral:", f"- CPU: {cpu_fmt}", f"- Memória: {mem_fmt}"]
+
+
+def _answer_containers_top(resultado: Dict[str, Any], alvo: str) -> str:
+    linhas = _prefixo_containers(resultado, alvo)
+    linhas.extend(
+        [
+            f"Foram encontrados {resultado.get('total_encontrados', 0)} containers.",
+            _linha_stale(resultado),
+            "",
+            "Top CPU por pico:",
+        ]
     )
 
-    linhas_top = _prefixo_containers(resultado, alvo)
-    linhas_top.extend([f"Foram encontrados {total} containers.", stale_txt, ""])
-    linhas_top.append("Top CPU por pico:")
-    linhas_top.extend([f"- {linha}" for linha in top_cpu_linhas] if top_cpu_linhas else ["- n/a"])
-    linhas_top.extend(["", "Top memória por pico:"])
-    linhas_top.extend([f"- {linha}" for linha in top_memoria_linhas] if top_memoria_linhas else ["- n/a"])
-    linhas_top.extend(["", "Média geral:", f"- CPU: {cpu_media_fmt}", f"- Memória: {mem_media_fmt}"])
-    if atraso_medio is not None:
-        linhas_top.extend(["", atraso_txt])
-    linhas_top.extend(_linhas_erros(errors))
+    top_cpu = [
+        f"- {item.get('nome', 'desconhecido')}: {item.get('cpu_pico_fmt') or item.get('cpu_pico_cores', 'n/a')}"
+        for item in resultado.get("top_cpu", [])[:3]
+    ]
+    linhas.extend(top_cpu or ["- n/a"])
 
-    linhas_completas = _prefixo_containers(resultado, alvo)
-    linhas_completas.extend([f"Foram encontrados {total} containers.", stale_txt, unknown_txt, ""])
-    linhas_completas.append("Saúde de todos os containers:")
-    linhas_completas.extend(
-        [f"- {linha}" for linha in todos_containers_linhas]
-        if todos_containers_linhas
+    linhas.extend(["", "Top memória por pico:"])
+    top_mem = [
+        f"- {item.get('nome', 'desconhecido')}: {item.get('mem_pico_fmt') or item.get('mem_pico_bytes', 'n/a')}"
+        for item in resultado.get("top_memoria", [])[:3]
+    ]
+    linhas.extend(top_mem or ["- n/a"])
+
+    linhas.extend(_linhas_media_geral(resultado))
+
+    atraso = _linha_atraso(resultado)
+    if atraso:
+        linhas.extend(["", atraso])
+
+    linhas.extend(_linhas_erros(resultado.get("errors", [])))
+    return "\n".join(linhas)
+
+
+def _answer_containers_geral(resultado: Dict[str, Any], alvo: str) -> str:
+    linhas = _prefixo_containers(resultado, alvo)
+    linhas.extend(
+        [
+            f"Foram encontrados {resultado.get('total_encontrados', 0)} containers.",
+            _linha_stale(resultado),
+            _linha_unknown(resultado),
+            "",
+            "Saúde de todos os containers:",
+        ]
+    )
+
+    detalhes = resultado.get("detalhes", [])
+    if detalhes:
+        for item in detalhes:
+            linhas.append(
+                f"- {item.get('nome', 'desconhecido')} | status={item.get('status', 'unknown')} | "
+                f"CPU pico={item.get('cpu_pico_fmt', 'n/a')}, média={item.get('cpu_media_fmt', 'n/a')} | "
+                f"Memória pico={item.get('mem_pico_fmt', 'n/a')}, média={item.get('mem_media_fmt', 'n/a')}"
+            )
+    else:
+        linhas.append("- Nenhum container encontrado para o filtro informado.")
+
+    linhas.extend(_linhas_media_geral(resultado))
+
+    atraso = _linha_atraso(resultado)
+    if atraso:
+        linhas.extend(["", atraso])
+
+    linhas.extend(_linhas_erros(resultado.get("errors", [])))
+    return "\n".join(linhas)
+
+
+def _answer_containers_metrica(resultado: Dict[str, Any], alvo: str, foco: str) -> str:
+    if foco == "cpu":
+        titulo = "Uso de CPU:"
+        campos = ["cpu_pico_fmt", "cpu_media_fmt"]
+    else:
+        titulo = "Uso de memória:"
+        campos = ["mem_pico_fmt", "mem_media_fmt"]
+
+    linhas = _prefixo_containers(resultado, alvo)
+    linhas.append(titulo)
+
+    detalhes = resultado.get("detalhes", [])
+    corpo = _linhas_metricas_containers(detalhes, campos, ["pico", "média"])
+    linhas.extend(
+        [f"- {linha}" for linha in corpo]
+        if corpo
         else ["- Nenhum container encontrado para o filtro informado."]
     )
-    linhas_completas.extend(["", "Média geral:", f"- CPU: {cpu_media_fmt}", f"- Memória: {mem_media_fmt}"])
-    if atraso_medio is not None:
-        linhas_completas.extend(["", atraso_txt])
-    linhas_completas.extend(_linhas_erros(errors))
 
-    linhas_cpu = _prefixo_containers(resultado, alvo)
-    linhas_cpu.append("Uso de CPU:")
-    linhas_cpu.extend(
-        [f"- {linha}" for linha in cpu_containers_linhas]
-        if cpu_containers_linhas
-        else ["- Nenhum container encontrado para o filtro informado."]
-    )
-    linhas_cpu.extend(["", f"Média geral de CPU: {cpu_media_fmt}"])
-    linhas_cpu.extend(_linhas_erros(errors))
+    linhas.extend(_linhas_media_geral(resultado, incluir=foco))
+    linhas.extend(_linhas_erros(resultado.get("errors", [])))
+    return "\n".join(linhas)
 
-    linhas_memoria = _prefixo_containers(resultado, alvo)
-    linhas_memoria.append("Uso de memória:")
-    linhas_memoria.extend(
-        [f"- {linha}" for linha in memoria_containers_linhas]
-        if memoria_containers_linhas
-        else ["- Nenhum container encontrado para o filtro informado."]
-    )
-    linhas_memoria.extend(["", f"Média geral de memória: {mem_media_fmt}"])
-    linhas_memoria.extend(_linhas_erros(errors))
 
-    linhas_anomalia = [
+def _answer_containers_anomalias(resultado: Dict[str, Any], alvo: str) -> str:
+    linhas = [
         f"Máquina do {alvo}:",
         "Anomalias:",
     ]
-    if errors or stale or unknown:
-        linhas_anomalia.append("Containers: Há anomalias ou incertezas detectadas.")
-        linhas_anomalia.append(stale_txt)
-        linhas_anomalia.append(unknown_txt)
+
+    errors = resultado.get("errors", [])
+    if errors or resultado.get("stale") or resultado.get("unknown"):
+        linhas.append("Containers: Há anomalias ou incertezas detectadas.")
+        linhas.append(_linha_stale(resultado))
+        linhas.append(_linha_unknown(resultado))
     else:
-        linhas_anomalia.append("Containers: Nenhuma anomalia detectada.")
-    linhas_anomalia.extend(_linhas_erros(errors))
+        linhas.append("Containers: Nenhuma anomalia detectada.")
 
-    return {
-        "resumo_estruturado_top": {
-            "total": total,
-            "stale": stale,
-            "unknown": unknown,
-            "top_cpu_pico": top_cpu_linhas,
-            "top_memoria_pico": top_memoria_linhas,
-            "media_geral": {"cpu": cpu_media_fmt, "memoria": mem_media_fmt},
-            "atraso_ultima_observacao": atraso_txt,
-        },
-        "resumo_estruturado_completo": {
-            "total": total,
-            "stale": stale,
-            "unknown": unknown,
-            "containers": todos_containers_linhas,
-            "media_geral": {"cpu": cpu_media_fmt, "memoria": mem_media_fmt},
-            "atraso_ultima_observacao": atraso_txt,
-        },
-        "resumo_texto_top": "\n".join(linhas_top),
-        "resumo_texto_completo": "\n".join(linhas_completas),
-        "resumo_cpu_texto": "\n".join(linhas_cpu),
-        "resumo_memoria_texto": "\n".join(linhas_memoria),
-        "resumo_anomalia_texto": "\n".join(linhas_anomalia),
-    }
+    linhas.extend(_linhas_erros(errors))
+    return "\n".join(linhas)
 
 
+def _montar_answer_containers(resultado: Dict[str, Any], alvo: str, foco: str) -> str:
+    """
+    Monta APENAS o resumo do foco solicitado (evita gerar cinco resumos
+    redundantes por chamada, como na versão anterior).
+    """
+    if foco == "top":
+        return _answer_containers_top(resultado, alvo)
+    if foco in ("cpu", "memoria"):
+        return _answer_containers_metrica(resultado, alvo, foco)
+    if foco == "anomalias":
+        return _answer_containers_anomalias(resultado, alvo)
+    return _answer_containers_geral(resultado, alvo)
+
+
+# ---------------------------------------------------------
+# ANOMALIAS
+# ---------------------------------------------------------
 def _montar_answer_anomalias(resultado: Dict[str, Any], alvo: str) -> str:
     linhas = [
         f"Máquina do {alvo}:",
@@ -544,6 +617,16 @@ def _montar_answer_anomalias(resultado: Dict[str, Any], alvo: str) -> str:
     return "\n".join(linhas)
 
 
+# ---------------------------------------------------------
+# PROMQL CRU (valores compactos no answer, dados completos na telemetria)
+# ---------------------------------------------------------
+def _rotulo_serie(labels: Dict[str, str]) -> str:
+    if not labels:
+        return "{}"
+    pares = ", ".join(f'{k}="{v}"' for k, v in sorted(labels.items()))
+    return "{" + pares + "}"
+
+
 def _montar_answer_promql(resultado: Dict[str, Any], foco: str) -> str:
     linhas = ["Consulta PromQL:"]
     errors = _erros_promql(resultado, foco)
@@ -553,33 +636,60 @@ def _montar_answer_promql(resultado: Dict[str, Any], foco: str) -> str:
         linhas.extend(_linhas_erros(errors))
         return "\n".join(linhas)
 
+    result_type = resultado.get("resultType", "n/a")
+    series = resultado.get("result", [])
     linhas.append("Estado da coleta: success.")
-    linhas.append(f"resultType={resultado.get('resultType', 'n/a')}")
-    linhas.append(f"séries retornadas={len(resultado.get('result', []))}")
+    linhas.append(f"resultType={result_type}")
+    linhas.append(f"séries retornadas={len(series)}")
+
+    amostra = series[:_MAX_SERIES_PROMQL_ANSWER]
+
+    if result_type == "vector":
+        for item in amostra:
+            rotulo = _rotulo_serie(item.get("metric", {}))
+            valor = item.get("value", [None, "n/a"])
+            linhas.append(f"- {rotulo}: {valor[1] if len(valor) == 2 else 'n/a'}")
+    elif result_type == "matrix":
+        from services.prometheus import stats_serie, extrair_matrix
+
+        for labels, serie in extrair_matrix({"result": amostra}):
+            stats = stats_serie(serie)
+            media_txt = "n/a" if stats["mean"] is None else f"{stats['mean']:.4f}"
+            pico_txt = "n/a" if stats["max"] is None else f"{stats['max']:.4f}"
+            linhas.append(
+                f"- {_rotulo_serie(labels)}: média={media_txt}, pico={pico_txt}, pontos={len(serie)}"
+            )
+
+    if len(series) > _MAX_SERIES_PROMQL_ANSWER:
+        linhas.append(f"(+{len(series) - _MAX_SERIES_PROMQL_ANSWER} séries omitidas)")
+
     return "\n".join(linhas)
 
 
-@tool
-def prom_consulta_instantanea(promql: str) -> Dict[str, Any]:
+# =========================================================
+# FERRAMENTAS
+# =========================================================
+@tool(args_schema=_ARGS_SCHEMAS.get("prom_consulta_instantanea"))
+async def prom_consulta_instantanea(promql: str) -> Dict[str, Any]:
     """
     Consulta instantânea no Prometheus (/api/v1/query).
     Use somente quando o usuário pedir PromQL ou métricas cruas explicitamente.
     """
     try:
         consulta = _validar_promql(promql)
-        resultado = executar_query_instantanea(consulta)
+        resultado = await executar_query_instantanea(consulta)
+        registrar_dados_brutos("prom_consulta_instantanea", resultado)
+
         errors = _erros_promql(resultado, "promql_instantanea")
-        status = "degraded" if errors else "success"
-        return _resposta_canonica(
-            status=status,
+        return _resposta_llm(
+            status="degraded" if errors else "success",
             foco="promql_instantanea",
             answer=_montar_answer_promql(resultado, "promql_instantanea"),
-            data=resultado,
-            errors=errors,
         )
-    except ValueError as e:
+    except ParametroInvalidoError as e:
         return _erro_validacao("promql", str(e))
     except Exception as e:
+        logger.exception("Falha na consulta instantânea.")
         return _erro_execucao(
             mensagem="Falha ao executar consulta instantânea no Prometheus.",
             detalhe=str(e),
@@ -587,8 +697,8 @@ def prom_consulta_instantanea(promql: str) -> Dict[str, Any]:
         )
 
 
-@tool
-def prom_consulta_range(
+@tool(args_schema=_ARGS_SCHEMAS.get("prom_consulta_range"))
+async def prom_consulta_range(
     promql: str,
     janela_segundos: int = JANELA_PADRAO_SEGUNDOS,
     passo_segundos: int = PASSO_PADRAO_SEGUNDOS,
@@ -601,19 +711,19 @@ def prom_consulta_range(
         consulta = _validar_promql(promql)
         janela = _validar_janela(janela_segundos)
         passo = _validar_passo(passo_segundos, janela)
-        resultado = executar_query_range(consulta, janela, passo)
+        resultado = await executar_query_range(consulta, janela, passo)
+        registrar_dados_brutos("prom_consulta_range", resultado)
+
         errors = _erros_promql(resultado, "promql_range")
-        status = "degraded" if errors else "success"
-        return _resposta_canonica(
-            status=status,
+        return _resposta_llm(
+            status="degraded" if errors else "success",
             foco="promql_range",
             answer=_montar_answer_promql(resultado, "promql_range"),
-            data=resultado,
-            errors=errors,
         )
-    except ValueError as e:
+    except ParametroInvalidoError as e:
         return _erro_validacao("promql_range", str(e))
     except Exception as e:
+        logger.exception("Falha na consulta por intervalo.")
         return _erro_execucao(
             mensagem="Falha ao executar consulta por intervalo no Prometheus.",
             detalhe=str(e),
@@ -621,8 +731,8 @@ def prom_consulta_range(
         )
 
 
-@tool
-def tool_obter_saude_vm(
+@tool(args_schema=_ARGS_SCHEMAS.get("tool_obter_saude_vm"))
+async def tool_obter_saude_vm(
     alvo: Optional[str] = None,
     janela_segundos: int = JANELA_PADRAO_SEGUNDOS,
     foco: str = "geral",
@@ -635,29 +745,29 @@ def tool_obter_saude_vm(
     - foco: geral, cpu, memoria, disco ou rede.
     """
     try:
-        cfg = _resolver_alvo_seguro(alvo)
+        cfg = resolver_alvo(alvo)
         janela = _validar_janela(janela_segundos)
         foco_normalizado = _normalizar_foco(foco, FOCOS_VM)
-        resultado = obter_saude_vm(
+
+        resultado = await obter_saude_vm(
             janela_segundos=janela,
             job_node=cfg["job_node"],
         )
         resultado["alvo"] = cfg["alvo"]
+        registrar_dados_brutos("tool_obter_saude_vm", resultado)
 
-        return _resposta_canonica(
+        return _resposta_llm(
             status=_status_por_resultado(resultado),
             alvo=cfg["alvo"],
             foco=f"vm_{foco_normalizado}",
             answer=_montar_answer_vm(resultado, cfg["alvo"], foco_normalizado),
-            data=resultado,
-            errors=resultado.get("errors", []),
         )
-    except ValueError as e:
-        detalhe = str(e)
-        if "Ambiente" in detalhe or "Alvo" in detalhe:
-            return _erro_alvo(detalhe)
-        return _erro_validacao("tool_obter_saude_vm", detalhe)
+    except AlvoInvalidoError as e:
+        return _erro_alvo(str(e))
+    except ParametroInvalidoError as e:
+        return _erro_validacao("tool_obter_saude_vm", str(e))
     except Exception as e:
+        logger.exception("Falha ao obter a saúde da VM.")
         return _erro_execucao(
             mensagem="Falha ao obter a saúde da VM.",
             detalhe=str(e),
@@ -665,8 +775,8 @@ def tool_obter_saude_vm(
         )
 
 
-@tool
-def tool_obter_saude_containers(
+@tool(args_schema=_ARGS_SCHEMAS.get("tool_obter_saude_containers"))
+async def tool_obter_saude_containers(
     alvo: Optional[str] = None,
     janela_segundos: int = JANELA_PADRAO_SEGUNDOS,
     regex_nome: str = ".*",
@@ -681,44 +791,32 @@ def tool_obter_saude_containers(
     - foco: geral, top, cpu, memoria ou anomalias.
     """
     try:
-        cfg = _resolver_alvo_seguro(alvo)
+        cfg = resolver_alvo(alvo)
         janela = _validar_janela(janela_segundos)
         regex_seguro = _sanitizar_regex_nome(regex_nome)
         foco_normalizado = _normalizar_foco(foco, FOCOS_CONTAINERS)
 
-        resultado = obter_saude_containers(
+        resultado = await obter_saude_containers(
             janela_segundos=janela,
             job_containers=cfg["job_containers"],
             regex_nome=regex_seguro,
         )
-
-        resumo = _montar_resumo_containers(resultado, cfg["alvo"])
         resultado["alvo"] = cfg["alvo"]
         resultado["regex_nome"] = regex_seguro
-        resultado.update(resumo)
+        registrar_dados_brutos("tool_obter_saude_containers", resultado)
 
-        chave_answer = {
-            "geral": "resumo_texto_completo",
-            "top": "resumo_texto_top",
-            "cpu": "resumo_cpu_texto",
-            "memoria": "resumo_memoria_texto",
-            "anomalias": "resumo_anomalia_texto",
-        }[foco_normalizado]
-
-        return _resposta_canonica(
+        return _resposta_llm(
             status=_status_por_resultado(resultado),
             alvo=cfg["alvo"],
             foco=f"containers_{foco_normalizado}",
-            answer=resultado[chave_answer],
-            data=resultado,
-            errors=resultado.get("errors", []),
+            answer=_montar_answer_containers(resultado, cfg["alvo"], foco_normalizado),
         )
-    except ValueError as e:
-        detalhe = str(e)
-        if "Ambiente" in detalhe or "Alvo" in detalhe:
-            return _erro_alvo(detalhe)
-        return _erro_validacao("tool_obter_saude_containers", detalhe)
+    except AlvoInvalidoError as e:
+        return _erro_alvo(str(e))
+    except ParametroInvalidoError as e:
+        return _erro_validacao("tool_obter_saude_containers", str(e))
     except Exception as e:
+        logger.exception("Falha ao obter a saúde dos containers.")
         return _erro_execucao(
             mensagem="Falha ao obter a saúde dos containers.",
             detalhe=str(e),
@@ -726,8 +824,8 @@ def tool_obter_saude_containers(
         )
 
 
-@tool
-def tool_detectar_anomalias(
+@tool(args_schema=_ARGS_SCHEMAS.get("tool_detectar_anomalias"))
+async def tool_detectar_anomalias(
     alvo: Optional[str] = None,
     janela_segundos: int = JANELA_PADRAO_SEGUNDOS,
 ) -> Dict[str, Any]:
@@ -735,29 +833,29 @@ def tool_detectar_anomalias(
     Checa anomalias na VM e nos containers para um alvo.
     """
     try:
-        cfg = _resolver_alvo_seguro(alvo)
+        cfg = resolver_alvo(alvo)
         janela = _validar_janela(janela_segundos)
-        resultado = detectar_anomalias(
+
+        resultado = await detectar_anomalias(
             janela_segundos=janela,
             job_node=cfg["job_node"],
             job_containers=cfg["job_containers"],
         )
         resultado["alvo"] = cfg["alvo"]
+        registrar_dados_brutos("tool_detectar_anomalias", resultado)
 
-        return _resposta_canonica(
+        return _resposta_llm(
             status=resultado.get("status", _status_por_resultado(resultado)),
             alvo=cfg["alvo"],
             foco="anomalias",
             answer=_montar_answer_anomalias(resultado, cfg["alvo"]),
-            data=resultado,
-            errors=resultado.get("errors", []),
         )
-    except ValueError as e:
-        detalhe = str(e)
-        if "Ambiente" in detalhe or "Alvo" in detalhe:
-            return _erro_alvo(detalhe)
-        return _erro_validacao("tool_detectar_anomalias", detalhe)
+    except AlvoInvalidoError as e:
+        return _erro_alvo(str(e))
+    except ParametroInvalidoError as e:
+        return _erro_validacao("tool_detectar_anomalias", str(e))
     except Exception as e:
+        logger.exception("Falha ao detectar anomalias.")
         return _erro_execucao(
             mensagem="Falha ao detectar anomalias no ambiente.",
             detalhe=str(e),

@@ -9,6 +9,7 @@ REGRAS CONTRA ALUCINAÇÃO
 2. O histórico serve apenas para recuperar o último ambiente mencionado quando o usuário omitir o alvo.
 3. Se a ferramenta retornar `status=degraded`, informe o `answer` mesmo assim; não transforme coleta incompleta em estado ok.
 4. Se a ferramenta retornar `status=error`, responda com o `answer` da ferramenta ou peça o alvo quando ele estiver ausente.
+5. É PROIBIDO responder números sem ter executado uma ferramenta para a pergunta ATUAL. Sem execução nesta pergunta, você não tem dados.
 
 DEFINIÇÃO DE AMBIENTE
 Toda ferramenta exige o parâmetro `alvo`: `site` ou `testes`.
@@ -29,4 +30,5 @@ FORMATO FINAL
 3. Não acrescente conclusões próprias após o `answer`.
 
 Janela padrão de consulta: {JANELA_PADRAO_SEGUNDOS} segundos.
+/no_think
 """
