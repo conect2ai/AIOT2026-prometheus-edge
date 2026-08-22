@@ -141,8 +141,24 @@ grep -n "TRECHO DA PERGUNTA" resultados/rodada_1.jsonl
 sed -n 'Np' resultados/rodada_1.jsonl | python -m json.tool | less
 ```
 
-Decidiu o veredito? Corrija a célula no `avaliacao_v2.csv`. No artigo,
-reporte que os casos ambíguos passaram por auditoria manual.
+Decidiu o veredito? Registre-o em `resultados/manual_review.csv` (uma linha
+por interação REVISAR: rodada, id, `arquivo_jsonl`/`linha_jsonl`, decisão
+automática, `decisao_humana`, `acc_t_final`/`f_resp_final`/`r_ctx_final`,
+justificativa, evidência). É esse arquivo que
+`scripts/reproduzir_tabelas.py` aplica sobre os vereditos automáticos para
+recalcular as tabelas do artigo (`resultados/resumo_artigo.csv`):
+
+```bash
+python scripts/reproduzir_tabelas.py
+```
+
+No artigo, reporte que os casos ambíguos passaram por auditoria manual e
+quantos foram classificados como corretos/incorretos.
+
+> Nota sobre a retentativa: desde a versão publicada dos logs, a CLI grava a
+> flag explícita `retentativa_guarda` (e `guarda_recuperou` /
+> `aviso_fidelidade_emitido`); o avaliador a usa prioritariamente e só cai na
+> heurística de chamadas ao LLM (`retry_inferido=True`) em logs antigos.
 
 ---
 

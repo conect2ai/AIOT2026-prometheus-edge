@@ -16,9 +16,11 @@ ENV/
 .coverage
 htmlcov/
 
-# Logs e saidas temporarias
+# Logs e saidas temporarias (os logs de tela das rodadas publicadas em
+# resultados/logs/ fazem parte do artefato cientifico e sao versionados)
 *.log
-logs/
+!resultados/logs/*.log
+/logs/
 outputs/tmp/
 
 # Sistema operacional e IDEs

@@ -1,0 +1,65 @@
+## os-release
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.6
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+## kernel
+Linux <hostname> 6.18.39+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.18.39-1+rpt1 (2026-07-29) aarch64 GNU/Linux
+## python
+Python 3.13.5
+## ollama
+ollama version is 0.32.6
+NAME                 ID              SIZE      MODIFIED    
+qwen3:4b-instruct    0edcdef34593    2.5 GB    2 days ago     
+qwen3:4b             359d7dd4bcda    2.5 GB    2 weeks ago    
+  Model
+    architecture        qwen3     
+    parameters          4.0B      
+    context length      262144    
+    embedding length    2560      
+    quantization        Q4_K_M    
+
+  Capabilities
+    tools         
+    thinking      
+    completion    
+
+  Parameters
+    repeat_penalty    1                 
+    stop              "<|im_start|>"    
+    stop              "<|im_end|>"      
+    temperature       0.7               
+    top_k             20                
+    top_p             0.8               
+
+  License
+    Apache License               
+    Version 2.0, January 2004    
+    ...                          
+
+## prometheus
+bash: line 1: prometheus: command not found
+No files found for prometheus.service.
+## ollama override
+# /etc/systemd/system/ollama.service
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama serve
+User=ollama
+Group=ollama
+Restart=always
+RestartSec=3
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games"
+
+[Install]
+WantedBy=default.target
+## env

@@ -311,6 +311,207 @@ check(linha2["llm"]["prefill_tokens_por_s"] == 50.0, "prefill tokens/s")
 check(linha2["llm"]["decode_tokens_por_s"] == 10.0, "decode tokens/s")
 check(linha2["ferramentas"][0]["nome"] == "tool_x", "ferramenta registrada pelo handler")
 check(linha2["latencia_total_s"] >= 0, "latencia total presente")
+check(linha2["retentativa_guarda"] is False and linha2["guarda_recuperou"] is False
+      and linha2["aviso_fidelidade_emitido"] is False, "flags da guarda gravadas (False) sem ativacao")
+
+# ---------- memoria sanitizada (agent/engine.py) ----------
+import agent.engine as ae  # noqa: E402
+
+texto_com_numeros = "Máquina do site:\nEstado geral: ok.\nCPU: nível=ok, média=11.5%, pico=11.7%"
+resumo = ae._resumir_para_memoria(texto_com_numeros)
+check("11.5" not in resumo and "pico" not in resumo, "memoria remove linhas com numeros")
+check("Máquina do site:" in resumo and "Estado geral: ok." in resumo, "memoria preserva alvo e estado qualitativo")
+check("metricas omitidas" in resumo, "memoria anexa o marcador de omissao")
+check(ae._resumir_para_memoria("Qual ambiente: site ou testes?") == "Qual ambiente: site ou testes?",
+      "texto sem numeros fica intacto na memoria")
+check(ae._sanitizar_saidas({"output": texto_com_numeros, "n": 1})["n"] == 1, "sanitizar_saidas ignora nao-texto")
+
+memoria = ae.criar_memoria()
+asyncio.run(memoria.asave_context({"input": "como esta a vm do site?"}, {"output": texto_com_numeros}))
+if hasattr(memoria, "historico"):  # stub
+    conteudo_memoria = json.dumps(memoria.historico, ensure_ascii=False)
+else:  # langchain real
+    conteudo_memoria = json.dumps([m.content for m in memoria.chat_memory.messages], ensure_ascii=False)
+check("11.5" not in conteudo_memoria and "site" in conteudo_memoria, "memoria (asave_context) salva sem numeros")
+
+# ---------- guarda de fidelidade (main.py) ----------
+import main as cli  # noqa: E402
+
+check(cli.resposta_suspeita("CPU: média=11.5%"), "resposta com numeros e suspeita")
+check(cli.resposta_suspeita("[alvo omitido; herde do historico]"), "imitacao do marcador e suspeita")
+check(cli.resposta_suspeita("[metricas omitidas do historico; execute a ferramenta para dados atuais]"),
+      "marcador da memoria e suspeito")
+check(not cli.resposta_suspeita("Qual ambiente você deseja consultar: site ou testes?"),
+      "clarificacao sem numeros nao e suspeita")
+
+
+class ExecutorFalso:
+    """Simula o agente na nova tentativa: devolve saidas em sequencia e,
+    opcionalmente, registra uma ferramenta (como faria o callback)."""
+
+    def __init__(self, registro, saidas, ferramenta_no_retry=False, falhar=False):
+        self.registro = registro
+        self.saidas = list(saidas)
+        self.ferramenta_no_retry = ferramenta_no_retry
+        self.falhar = falhar
+        self.entradas = []
+
+    async def ainvoke(self, entrada, config=None):
+        self.entradas.append(entrada["input"])
+        if self.falhar:
+            raise RuntimeError("ollama indisponivel")
+        if self.ferramenta_no_retry:
+            self.registro.registrar_ferramenta("tool_obter_saude_vm", {"alvo": "site"}, 0.01)
+        return {"output": self.saidas.pop(0)}
+
+
+def _rodar_guarda(saida_inicial, saidas_retry, ferramenta_antes=False, **kw):
+    arq = Path(os.environ.get("TMPDIR", "/tmp")) / "exp_teste_guarda.jsonl"
+    arq.unlink(missing_ok=True)
+    reg_g = telemetry.ExperimentLogger(str(arq))
+    reg_g.iniciar_interacao("como esta a cpu do site?")
+    if ferramenta_antes:
+        reg_g.registrar_ferramenta("tool_obter_saude_vm", {"alvo": "site"}, 0.01)
+    ex = ExecutorFalso(reg_g, saidas_retry, **kw)
+    saida = asyncio.run(cli.aplicar_guarda_fidelidade(ex, None, reg_g, "como esta a cpu do site?", saida_inicial))
+    reg_g.finalizar_interacao(saida)
+    linha_g = json.loads(arq.read_text(encoding="utf-8").strip())
+    return saida, ex, linha_g
+
+
+# caminho 1: sem ativacao (ferramenta executada, numeros legitimos)
+saida, ex, lg = _rodar_guarda("CPU: média=11.5%", ["nao deveria ser chamado"], ferramenta_antes=True)
+check(ex.entradas == [] and saida == "CPU: média=11.5%", "guarda nao ativa com ferramenta executada")
+check(lg["retentativa_guarda"] is False and lg["guarda_recuperou"] is False
+      and lg["aviso_fidelidade_emitido"] is False, "caminho 1: flags False no JSONL")
+
+# caminho 1b: sem ativacao (saida sem numeros, sem ferramenta — clarificacao)
+saida, ex, lg = _rodar_guarda("Qual ambiente: site ou testes?", ["x"])
+check(ex.entradas == [] and lg["retentativa_guarda"] is False, "guarda nao ativa em clarificacao sem numeros")
+
+# caminho 2: ativacao + recuperacao no primeiro retry
+saida, ex, lg = _rodar_guarda("CPU: média=11.5%", ["CPU: nível=ok, média=12.0%"], ferramenta_no_retry=True)
+check(len(ex.entradas) == 1 and cli.INSTRUCAO_RETENTATIVA in ex.entradas[0], "retry reenvia a pergunta exigindo ferramenta")
+check(saida == "CPU: nível=ok, média=12.0%" and cli.AVISO_FIDELIDADE not in saida, "caminho 2: saida do retry sem aviso")
+check(lg["retentativa_guarda"] is True and lg["guarda_recuperou"] is True
+      and lg["aviso_fidelidade_emitido"] is False, "caminho 2: flags de recuperacao no JSONL")
+
+# caminho 3: ativacao sem recuperacao -> aviso final
+saida, ex, lg = _rodar_guarda("CPU: média=11.5%", ["CPU: média=11.5% (de novo)"])
+check(saida.endswith(cli.AVISO_FIDELIDADE), "caminho 3: aviso de fidelidade anexado")
+check(lg["retentativa_guarda"] is True and lg["guarda_recuperou"] is False
+      and lg["aviso_fidelidade_emitido"] is True, "caminho 3: flags de aviso no JSONL")
+
+# caminho 3b: falha na nova tentativa -> mantem saida original + aviso
+saida, ex, lg = _rodar_guarda("CPU: média=11.5%", [], falhar=True)
+check(saida.startswith("CPU: média=11.5%") and saida.endswith(cli.AVISO_FIDELIDADE),
+      "falha no retry: saida original com aviso")
+check(lg["retentativa_guarda"] is True and lg["aviso_fidelidade_emitido"] is True, "falha no retry: flags no JSONL")
+
+# ---------- avaliador do protocolo (scripts/avaliar_protocolo.py) ----------
+import importlib.util  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location("avaliar_protocolo", RAIZ / "scripts" / "avaliar_protocolo.py")
+av = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(av)
+
+gabarito = json.loads((RAIZ / "scripts" / "gabarito_v2.json").read_text(encoding="utf-8"))["perguntas"]
+check(len(gabarito) == 80, "gabarito v2 tem 80 perguntas")
+check(len({p["id"] for p in gabarito}) == 80, "gabarito v2 tem 80 ids unicos")
+check(sum(1 for p in gabarito if p["esperado"]["tipo"] in ("ferramenta", "multi_ferramenta")) == 68,
+      "68 perguntas elegiveis para a guarda (ferramenta + multi_ferramenta)")
+check(sum(1 for p in gabarito if p["origem"] == "v1") == 30 and sum(1 for p in gabarito if p["origem"] == "v2") == 50,
+      "gabarito: 30 perguntas v1 + 50 v2")
+
+item_ferr = {
+    "id": "X1", "origem": "v2", "categoria": "teste", "pergunta": "como esta a cpu do site?", "apos": None,
+    "esperado": {"tipo": "ferramenta", "chamadas": [{"ferramenta": "tool_obter_saude_vm", "alvo": "site"}],
+                 "resultado": "dados"},
+}
+EXEC_SITE = {"nome": "tool_obter_saude_vm", "entrada": "{'alvo': 'site', 'foco': 'cpu'}", "status": "success"}
+EXEC_TESTES = {"nome": "tool_obter_saude_vm", "entrada": "{'alvo': 'testes', 'foco': 'cpu'}", "status": "success"}
+
+
+def linha_fixture(**kw):
+    base = {
+        "pergunta": "como esta a cpu do site?", "resposta": "CPU: nível=ok, média=11.5%, pico=11.7%",
+        "erro": None, "latencia_total_s": 1.0, "ferramentas": [dict(EXEC_SITE)], "llm": {"chamadas": 2},
+        "dados_brutos": {"tool_obter_saude_vm": {"cpu": {"media": 11.5, "pico": 11.7}}},
+    }
+    base.update(kw)
+    return base
+
+
+r = av.avaliar(item_ferr, linha_fixture(retentativa_guarda=True, guarda_recuperou=True))
+check(r["acc_t"] == "PASS" and r["f_resp"] == "PASS", "fixture: Acc_t e F_resp PASS")
+check(r["retentativa"] is True and r["retry_inferido"] is False and r["guarda_recuperou"] is True,
+      "flag explicita de retentativa prevalece")
+r = av.avaliar(item_ferr, linha_fixture(retentativa_guarda=False, llm={"chamadas": 5}))
+check(r["retentativa"] is False and r["retry_inferido"] is False, "flag explicita False vence a heuristica")
+r = av.avaliar(item_ferr, linha_fixture(llm={"chamadas": 3}))
+check(r["retentativa"] is True and r["retry_inferido"] is True, "log antigo: heuristica marca retry_inferido")
+r = av.avaliar(item_ferr, linha_fixture(llm={"chamadas": 2}))
+check(r["retentativa"] is False and r["retry_inferido"] is True, "log antigo: sem retry pela heuristica")
+r = av.avaliar(item_ferr, linha_fixture(erro="contexto excedido", retentativa_guarda=False))
+check(r["acc_t"] == "FAIL" and r["retentativa"] is False, "interacao com erro continua elegivel (flag)")
+
+item_multi = dict(item_ferr, id="X2", esperado={
+    "tipo": "multi_ferramenta", "resultado": "dados",
+    "chamadas": [{"ferramenta": "tool_obter_saude_vm", "alvo": "site"},
+                 {"ferramenta": "tool_obter_saude_vm", "alvo": "testes"}]})
+duas = [dict(EXEC_SITE), dict(EXEC_TESTES)]
+r = av.avaliar(item_multi, linha_fixture(ferramentas=duas, llm={"chamadas": 3}))
+check(r["acc_t"] == "PASS" and r["retentativa"] is None, "multi_ferramenta sem flag: heuristica nao se aplica")
+r = av.avaliar(item_multi, linha_fixture(ferramentas=duas, llm={"chamadas": 3}, retentativa_guarda=False))
+check(r["retentativa"] is False and r["retry_inferido"] is False, "multi_ferramenta com flag: elegivel, sem retry")
+
+r = av.avaliar(item_ferr, linha_fixture(resposta="CPU: nível=ok, média=40.0%"))
+check(r["f_resp"] == "REVISAR", "numero sem par nos dados brutos vira REVISAR")
+r = av.avaliar(item_ferr, linha_fixture(ferramentas=[], dados_brutos={}))
+check(r["acc_t"] == "FAIL" and r["f_resp"] == "FAIL", "numeros sem ferramenta: Acc_t e F_resp FAIL")
+r = av.avaliar(item_ferr, linha_fixture(ferramentas=[dict(EXEC_TESTES)]))
+check(r["acc_t"] == "FAIL", "alvo errado reprova Acc_t")
+
+item_ctx = dict(item_ferr, id="X3", apos="X1")
+r = av.avaliar(item_ctx, linha_fixture())
+check(r["r_ctx"] == "PASS", "R_ctx PASS com alvo herdado")
+r = av.avaliar(item_ctx, linha_fixture(ferramentas=[dict(EXEC_TESTES)]))
+check(r["r_ctx"] == "FAIL", "R_ctx FAIL com alvo nao herdado")
+
+# perguntas deliberadamente distintas: o casamento e difuso (ratio >= 0.90)
+PERGUNTAS_FIXTURE = ["como esta a cpu do site?", "liste os containers de testes", "ha anomalias na vm do site?"]
+gab3 = [{"id": f"Q{i}", "pergunta": p} for i, p in enumerate(PERGUNTAS_FIXTURE)]
+
+
+def _lin(i):
+    return {"pergunta": PERGUNTAS_FIXTURE[i]}
+
+
+passes, sobras = av.casar_passes(gab3, [_lin(0), _lin(1), _lin(2)])
+check(len(passes) == 1 and sobras == 0 and all(l is not None for _, l in passes[0]), "passe completo casado")
+passes, sobras = av.casar_passes(gab3, [_lin(0), _lin(2)])
+check(len(passes) == 1 and sum(1 for _, l in passes[0] if l is None) == 1, "pergunta ausente detectada")
+passes, sobras = av.casar_passes(gab3, [_lin(0), _lin(1), _lin(2), _lin(0), _lin(1), _lin(2)])
+check(len(passes) == 2, "protocolo duplicado vira dois passes")
+passes, sobras = av.casar_passes(gab3, [_lin(2), _lin(0), _lin(1)])
+check(len(passes) == 2 and sum(1 for _, l in passes[0] if l is None) == 1, "fora de ordem gera lacuna e passe extra")
+
+# ---------- resultados publicados (resultados/rodada_*.jsonl) ----------
+arquivos_rodadas = sorted((RAIZ / "resultados").glob("rodada_*.jsonl"))
+if arquivos_rodadas:
+    check(len(arquivos_rodadas) == 3, "tres rodadas publicadas")
+    retries = {}
+    for caminho in arquivos_rodadas:
+        linhas_r = av.carregar_jsonl(caminho)
+        check(len(linhas_r) == 80, f"{caminho.name}: 80 interacoes")
+        passes, sobras = av.casar_passes(gabarito, linhas_r)
+        check(len(passes) == 1 and sobras == 0 and all(l is not None for _, l in passes[0]),
+              f"{caminho.name}: 80/80 perguntas casadas em um unico passe")
+        check(all("retentativa_guarda" in l for l in linhas_r), f"{caminho.name}: flag explicita em todas as linhas")
+        retries[caminho.stem] = sum(1 for l in linhas_r if l.get("retentativa_guarda"))
+    check(sorted(retries.values()) == [15, 15, 16], f"retentativas por rodada = 15/15/16 ({retries})")
+else:
+    print("SKIP resultados/rodada_*.jsonl ausentes")
 
 print()
 if falhas:

@@ -10,6 +10,7 @@ Fluxo por interação:
 
 import asyncio
 import logging
+import re
 from typing import Optional
 
 from core.config import (
@@ -50,12 +51,79 @@ def exibir_banner() -> None:
 def deve_encerrar(texto: str) -> bool:
     return texto.strip().lower() in COMANDOS_SAIDA
 
+# Imitacao do marcador de historico: o modelo compacto as vezes responde com
+# uma "nota entre colchetes" no estilo do marcador da memoria (ex.:
+# "[alvo omitido; herde do historico]") em vez de executar a ferramenta.
+_NOTA_ENTRE_COLCHETES = re.compile(r"^\s*\[[^\]]{3,}\]\s*$", re.S)
+_NOTA_COM_VOCABULARIO_DO_MARCADOR = re.compile(
+    r"\[[^\]]*(omitid|omiss|herd|hist[oó]rico)[^\]]*\]", re.I
+)
+
+
 def resposta_suspeita(texto: str) -> bool:
-    """Resposta que aparenta metricas (ou imita o marcador do historico)."""
+    """Resposta que aparenta metricas ou imita o marcador do historico."""
     if any(ch.isdigit() for ch in texto):
         return True
-    return "metricas omitidas" in texto or "métricas omitidas" in texto
+    if "metricas omitidas" in texto or "métricas omitidas" in texto:
+        return True
+    return bool(
+        _NOTA_ENTRE_COLCHETES.match(texto)
+        or _NOTA_COM_VOCABULARIO_DO_MARCADOR.search(texto)
+    )
 
+
+
+INSTRUCAO_RETENTATIVA = (
+    "(Obrigatorio: execute a ferramenta adequada AGORA "
+    "e responda somente com o answer dela.)"
+)
+
+AVISO_FIDELIDADE = (
+    "\n\n[Aviso de fidelidade] Nenhuma ferramenta consultou o "
+    "Prometheus nesta resposta; os numeros acima podem nao "
+    "refletir o estado atual. Repita a pergunta para forcar "
+    "uma nova coleta."
+)
+
+
+async def aplicar_guarda_fidelidade(executor, config, registro, pergunta, saida):
+    """Guarda de fidelidade em tempo de execucao.
+
+    Sem nenhuma ferramenta executada na interacao, numeros ou o marcador de
+    historico na saida indicam imitacao do turno anterior. A guarda entao:
+
+    1. nao ativa (saida limpa ou ferramenta executada): devolve a saida;
+    2. ativa e recupera: reenvia a pergunta exigindo ferramenta; se a nova
+       saida deixa de ser suspeita (ou uma ferramenta executou), devolve-a e
+       registra `guarda_recuperou=true`;
+    3. ativa e nao recupera: anexa um aviso explicito ao operador e registra
+       `aviso_fidelidade_emitido=true`.
+
+    Cada caminho fica registrado na telemetria (`retentativa_guarda`,
+    `guarda_recuperou`, `aviso_fidelidade_emitido`) para que o avaliador
+    nao precise inferir a ativacao pelo numero de chamadas ao LLM.
+    """
+    if registro is None:
+        return saida
+    if not (registro.ferramentas_na_interacao == 0 and resposta_suspeita(saida)):
+        return saida
+
+    registro.marcar_retentativa()
+    try:
+        resposta = await executor.ainvoke(
+            {"input": f"{pergunta}\n{INSTRUCAO_RETENTATIVA}"},
+            config=config,
+        )
+        saida = resposta.get("output", saida)
+    except Exception:
+        logger.exception("Falha na nova tentativa com ferramenta obrigatoria.")
+
+    if registro.ferramentas_na_interacao == 0 and resposta_suspeita(saida):
+        registro.marcar_aviso_fidelidade()
+        return saida + AVISO_FIDELIDADE
+
+    registro.marcar_recuperacao_guarda()
+    return saida
 
 
 async def executar_loop(executor, registro, handler) -> None:
@@ -101,40 +169,9 @@ async def executar_loop(executor, registro, handler) -> None:
             print(f"\n[Erro interno do agente] {e}")
             continue
 
-        # Guarda de fidelidade: sem nenhuma ferramenta executada, numeros ou
-        # o marcador de historico na saida indicam imitacao do turno anterior.
-        # Primeiro tenta de novo com instrucao explicita; se persistir, avisa.
-        if (
-            registro is not None
-            and registro.ferramentas_na_interacao == 0
-            and resposta_suspeita(saida)
-        ):
-            try:
-                resposta = await executor.ainvoke(
-                    {
-                        "input": (
-                            f"{pergunta}\n"
-                            "(Obrigatorio: execute a ferramenta adequada AGORA "
-                            "e responda somente com o answer dela.)"
-                        )
-                    },
-                    config=config,
-                )
-                saida = resposta.get("output", saida)
-            except Exception:
-                logger.exception("Falha na nova tentativa com ferramenta obrigatoria.")
-
-        if (
-            registro is not None
-            and registro.ferramentas_na_interacao == 0
-            and resposta_suspeita(saida)
-        ):
-            saida += (
-                "\n\n[Aviso de fidelidade] Nenhuma ferramenta consultou o "
-                "Prometheus nesta resposta; os numeros acima podem nao "
-                "refletir o estado atual. Repita a pergunta para forcar "
-                "uma nova coleta."
-            )
+        saida = await aplicar_guarda_fidelidade(
+            executor, config, registro, pergunta, saida
+        )
 
         print(f"\nAgente: {saida}")
 

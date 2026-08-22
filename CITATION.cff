@@ -1,0 +1,58 @@
+cff-version: 1.2.0
+message: "If you use this software or the published evaluation artifacts, please cite the paper below."
+type: software
+title: "Grounded Tool Calling for Edge AIoT Observability: A Local SLM-Prometheus Deployment (software and evaluation artifacts)"
+version: 1.0-aiot2026
+date-released: 2026-08-22
+repository-code: "https://github.com/conect2ai/AIOT2026-prometheus-edge"
+# doi: <preencher com o DOI do Zenodo apos arquivar a tag v1.0-aiot2026>
+authors:
+  - family-names: Justino
+    given-names: Erick
+    affiliation: "Federal University of Rio Grande do Norte, Natal, Brazil"
+  - family-names: Araujo
+    given-names: Mateus
+    affiliation: "Federal University of Rio Grande do Norte, Natal, Brazil"
+  - family-names: Silva
+    given-names: Marianne
+    affiliation: "Federal University of Alagoas, Penedo, Brazil"
+  - family-names: Brandão
+    given-names: Dennis
+    affiliation: "University of Brescia, Brescia, Italy"
+  - family-names: Sisinni
+    given-names: Emiliano
+    affiliation: "University of Brescia, Brescia, Italy"
+  - family-names: Ferrari
+    given-names: Paolo
+    affiliation: "University of Brescia, Brescia, Italy"
+  - family-names: Silva
+    given-names: Ivanovitch
+    affiliation: "Federal University of Rio Grande do Norte, Natal, Brazil"
+keywords:
+  - AIoT
+  - edge computing
+  - observability
+  - Prometheus
+  - tool calling
+  - small language models
+  - Raspberry Pi 5
+preferred-citation:
+  type: conference-paper
+  title: "Grounded Tool Calling for Edge AIoT Observability: A Local SLM-Prometheus Deployment"
+  year: 2026
+  # conference / doi: preencher apos a aceitacao
+  authors:
+    - family-names: Justino
+      given-names: Erick
+    - family-names: Araujo
+      given-names: Mateus
+    - family-names: Silva
+      given-names: Marianne
+    - family-names: Brandão
+      given-names: Dennis
+    - family-names: Sisinni
+      given-names: Emiliano
+    - family-names: Ferrari
+      given-names: Paolo
+    - family-names: Silva
+      given-names: Ivanovitch

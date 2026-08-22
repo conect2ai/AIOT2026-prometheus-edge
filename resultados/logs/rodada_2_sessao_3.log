@@ -1,0 +1,13 @@
+2026-08-21 21:36:58,297 INFO agent.engine: Executor do agente inicializado com sucesso (modelo=qwen3:4b-instruct).
+=====================================================
+Agente Iniciado!
+Modelo local: qwen3:4b-instruct
+Monitorando Prometheus em: http://localhost:9090
+Telemetria do experimento: <PROJETO>/resultados/rodada_2.jsonl
+Digite 'sair' para encerrar.
+=====================================================
+
+Você: 
+Agente: Nenhuma anomalia detectada em containers.
+
+Você: Encerrando o agente. Até logo!
