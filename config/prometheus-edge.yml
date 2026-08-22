@@ -1,0 +1,57 @@
+# prometheus.yml usado nas tres rodadas avaliadas do artigo (Raspberry Pi 5).
+#
+# Unicas alteracoes em relacao ao original: os enderecos dos exporters foram
+# substituidos por placeholders. No experimento, cada alvo era um endpoint
+# local no proprio Pi (tunel SSH ate a VM monitorada); em uma instalacao na
+# mesma rede, use <host>:<porta> do Node Exporter (padrao 9100) e do cAdvisor
+# (padrao 8080) de cada VM. Os job_name DEVEM coincidir com core/config.py.
+#
+# Inicio (binario oficial descompactado em /opt/prometheus, sem flags extras:
+# retencao nos padroes do Prometheus e WAL comprimido por padrao):
+#   cd /opt/prometheus && ./prometheus --config.file=prometheus.yml
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  # --- VM DO SITE: Node Exporter ---
+  - job_name: "vm_site_conect2ai"
+    static_configs:
+      - targets: ["<NODE-EXPORTER-VM-SITE>"]
+        labels:
+          os: "linux"
+          ambiente: "vm_site"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: node_cpu_seconds_total|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_network_receive_errs_total|node_network_transmit_errs_total
+        action: keep
+
+  # --- VM DO SITE: cAdvisor ---
+  - job_name: "containers_vm_site_conect2ai"
+    static_configs:
+      - targets: ["<CADVISOR-VM-SITE>"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: container_cpu_usage_seconds_total|container_memory_usage_bytes|container_last_seen
+        action: keep
+
+  # --- VM DE TESTES: Node Exporter ---
+  - job_name: "vm_testes"
+    static_configs:
+      - targets: ["<NODE-EXPORTER-VM-TESTES>"]
+        labels:
+          os: "linux"
+          ambiente: "vm_testes"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: node_cpu_seconds_total|node_memory_MemAvailable_bytes|node_memory_MemTotal_bytes|node_filesystem_avail_bytes|node_filesystem_size_bytes|node_network_receive_bytes_total|node_network_transmit_bytes_total|node_network_receive_errs_total|node_network_transmit_errs_total
+        action: keep
+
+  # --- VM DE TESTES: cAdvisor ---
+  - job_name: "containers_vm_testes"
+    static_configs:
+      - targets: ["<CADVISOR-VM-TESTES>"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: container_cpu_usage_seconds_total|container_memory_usage_bytes|container_last_seen
+        action: keep

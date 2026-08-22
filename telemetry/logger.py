@@ -110,6 +110,21 @@ class ExperimentLogger:
             }
         )
 
+    def marcar_retentativa(self) -> None:
+        """Registra que a guarda de fidelidade reenviou a pergunta nesta interacao."""
+        if self._atual is not None:
+            self._atual["retentativa_guarda"] = True
+
+    def marcar_recuperacao_guarda(self) -> None:
+        """Registra que a nova tentativa da guarda produziu resposta aceitavel."""
+        if self._atual is not None:
+            self._atual["guarda_recuperou"] = True
+
+    def marcar_aviso_fidelidade(self) -> None:
+        """Registra que a guarda nao recuperou e o aviso final foi emitido."""
+        if self._atual is not None:
+            self._atual["aviso_fidelidade_emitido"] = True
+
     def registrar_dados_brutos(self, nome_ferramenta: str, dados: Any) -> None:
         """Guarda o retorno bruto de uma ferramenta para auditoria de F_resp."""
         if self._atual is None:
@@ -145,6 +160,9 @@ class ExperimentLogger:
             "latencia_total_s": round(latencia_total, 3),
             "latencia_ferramentas_s": round(latencia_ferramentas, 3),
             "ferramentas": atual["ferramentas"],
+            "retentativa_guarda": bool(atual.get("retentativa_guarda", False)),
+            "guarda_recuperou": bool(atual.get("guarda_recuperou", False)),
+            "aviso_fidelidade_emitido": bool(atual.get("aviso_fidelidade_emitido", False)),
             "llm": self._agregar_llm(atual["chamadas_llm"]),
             "chamadas_llm": atual["chamadas_llm"],
             "dados_brutos": atual["dados_brutos"],

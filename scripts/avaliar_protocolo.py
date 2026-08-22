@@ -10,9 +10,13 @@ telemetria (resultados/*.jsonl) e calcula, por rodada e por categoria:
   dados SEM números vira REVISAR, salvo estado qualitativo explícito
   como "nenhuma anomalia");
 - R_ctx : herança correta de alvo nas perguntas dependentes de contexto;
-- Retentativa: interações que precisaram da nova tentativa automática
-  (heurística: chamadas de LLM >= ferramentas executadas + 2, para não
-  confundir a segunda ferramenta legítima de P28/P29/D05 com retry).
+- Retentativa: interações em que a guarda de fidelidade reenviou a
+  pergunta. Fonte prioritária: flag explícita `retentativa_guarda` gravada
+  pela CLI (com `guarda_recuperou` / `aviso_fidelidade_emitido`). Logs
+  antigos sem a flag usam a heurística "chamadas de LLM >= ferramentas
+  executadas + 2" (restrita ao tipo `ferramenta`, para não confundir a
+  segunda ferramenta legítima de P28/P29/D05 com retry) e saem marcados
+  com `retry_inferido=True` no CSV.
 
 Casos especiais:
 - `ferramenta_tolerada` (B05): em tipo recusa, chamar a ferramenta e
@@ -28,7 +32,7 @@ contado cegamente como acerto).
 
 Uso:
     python scripts/avaliar_protocolo.py resultados/rodada_1.jsonl [rodada_2.jsonl ...]
-    python scripts/avaliar_protocolo.py            # usa resultados/experimentos.jsonl
+    python scripts/avaliar_protocolo.py            # usa resultados/rodada_*.jsonl
 
 Cada arquivo é tratado como (pelo menos) uma rodada; se um mesmo arquivo
 contiver o protocolo repetido, os passes extras são detectados e numerados.
@@ -47,7 +51,7 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
 GABARITO_PADRAO = RAIZ / "scripts" / "gabarito_v2.json"
-TELEMETRIA_PADRAO = RAIZ / "resultados" / "experimentos.jsonl"
+TELEMETRIA_PADRAO = sorted((RAIZ / "resultados").glob("rodada_*.jsonl"))
 CSV_PADRAO = RAIZ / "resultados" / "avaliacao_v2.csv"
 
 TOLERANCIA_RELATIVA = 0.05  # 5%, como no protocolo do artigo
@@ -227,6 +231,9 @@ def avaliar(item: dict, linha) -> dict:
         "f_resp": None,
         "r_ctx": None,
         "retentativa": None,
+        "retry_inferido": None,
+        "guarda_recuperou": None,
+        "aviso_fidelidade": None,
         "latencia_total_s": None,
         "motivos": [],
     }
@@ -240,6 +247,27 @@ def avaliar(item: dict, linha) -> dict:
     brutos = linha.get("dados_brutos") or {}
     llm = linha.get("llm") or {}
     resultado["latencia_total_s"] = linha.get("latencia_total_s")
+
+    # ---------- Retentativa ----------
+    # Fonte prioritaria: a flag explicita gravada pela CLI no ponto de
+    # ativacao da guarda (`retentativa_guarda`), valida para qualquer
+    # pergunta que envolva ferramenta (tipos `ferramenta` e
+    # `multi_ferramenta`: 68 interacoes elegiveis por rodada no protocolo v2,
+    # inclusive as que terminaram em erro sem retry).
+    # Compatibilidade: logs antigos sem a flag caem na heuristica
+    # (chamadas de LLM >= ferramentas executadas + 2), restrita ao tipo
+    # `ferramenta` para nao confundir a segunda ferramenta legitima de
+    # P28/P29/D05 com retry; o resultado e marcado `retry_inferido=True`.
+    if "retentativa_guarda" in linha:
+        if tipo in ("ferramenta", "multi_ferramenta"):
+            resultado["retentativa"] = bool(linha.get("retentativa_guarda"))
+            resultado["retry_inferido"] = False
+            resultado["guarda_recuperou"] = linha.get("guarda_recuperou")
+            resultado["aviso_fidelidade"] = linha.get("aviso_fidelidade_emitido")
+    elif tipo == "ferramenta" and not linha.get("erro"):
+        chamadas_llm = llm.get("chamadas") or len(linha.get("chamadas_llm") or [])
+        resultado["retentativa"] = bool(chamadas_llm and chamadas_llm >= len(ferramentas) + 2)
+        resultado["retry_inferido"] = True
 
     if linha.get("erro"):
         resultado["acc_t"] = "FAIL"
@@ -373,14 +401,6 @@ def avaliar(item: dict, linha) -> dict:
                 "sem dados brutos proprios na interacao (possivel resposta reciclada); auditar"
             )
 
-    # ---------- Retentativa (heurística) ----------
-    # Fluxo normal: 1 chamada de LLM por ferramenta + 1 de sintese final.
-    # O retry da guarda de fidelidade adiciona um ainvoke inteiro, entao
-    # o limiar acompanha o numero de ferramentas executadas.
-    if tipo == "ferramenta":
-        chamadas_llm = llm.get("chamadas") or len(linha.get("chamadas_llm") or [])
-        resultado["retentativa"] = bool(chamadas_llm and chamadas_llm >= len(ferramentas) + 2)
-
     return resultado
 
 
@@ -471,12 +491,15 @@ def resumir(avaliacoes: list, chave: str):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Avalia o protocolo v2 contra a telemetria JSONL.")
     parser.add_argument("telemetria", nargs="*", type=Path, default=None,
-                        help=f"arquivos JSONL (padrao: {TELEMETRIA_PADRAO})")
+                        help="arquivos JSONL (padrao: resultados/rodada_*.jsonl)")
     parser.add_argument("--gabarito", type=Path, default=GABARITO_PADRAO)
     parser.add_argument("--csv", type=Path, default=CSV_PADRAO)
     args = parser.parse_args()
 
-    arquivos = args.telemetria or [TELEMETRIA_PADRAO]
+    arquivos = args.telemetria or TELEMETRIA_PADRAO
+    if not arquivos:
+        print("[erro] nenhum JSONL informado e nenhum resultados/rodada_*.jsonl encontrado.")
+        return 1
     gabarito = json.loads(args.gabarito.read_text(encoding="utf-8"))["perguntas"]
 
     avaliacoes = []
@@ -505,6 +528,10 @@ def main() -> int:
         return 1
 
     executadas = [a for a in avaliacoes if "pergunta nao encontrada na telemetria" not in a["motivos"]]
+    inferidos = sum(1 for a in executadas if a["retry_inferido"] is True)
+    if inferidos:
+        print(f"[aviso] {inferidos} interacao(oes) sem a flag `retentativa_guarda`: "
+              "retentativa inferida pela heuristica de chamadas ao LLM (retry_inferido=True).")
     print(f"\n===== RESUMO GERAL ({len(executadas)} interacoes avaliadas) =====")
     resumir(executadas, "rodada")
     print("\n===== POR CATEGORIA (todas as rodadas) =====")
@@ -524,7 +551,8 @@ def main() -> int:
     args.csv.parent.mkdir(parents=True, exist_ok=True)
     with args.csv.open("w", newline="", encoding="utf-8") as arquivo:
         campos = ["rodada", "id", "origem", "categoria", "pergunta",
-                  "acc_t", "f_resp", "r_ctx", "retentativa",
+                  "acc_t", "f_resp", "r_ctx", "retentativa", "retry_inferido",
+                  "guarda_recuperou", "aviso_fidelidade",
                   "latencia_total_s", "motivos"]
         escritor = csv.DictWriter(arquivo, fieldnames=campos)
         escritor.writeheader()

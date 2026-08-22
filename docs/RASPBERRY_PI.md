@@ -9,9 +9,9 @@ localmente no próprio Pi.
 | Componente | Implicação |
 | --- | --- |
 | CPU 4× Cortex-A76 @ 2,4 GHz | A inferência do LLM roda **na CPU**. Prefill é o gargalo dominante; por isso as ferramentas devolvem payloads enxutos ao modelo. |
-| 16 GB de RAM | Comporta `qwen3:4b` Q4_K_M (~2,5 GB) + Prometheus + SO com muita folga (e até o `qwen3:8b`, se desejado). |
+| 16 GB de RAM | Comporta `qwen3:4b-instruct` Q4_K_M (~2,5 GB) + Prometheus + SO com muita folga (e até o `qwen3:8b`, se desejado). |
 | AI Kit (Hailo-8L) | O Hailo acelera **CNNs de visão**, não LLMs — ele não participa da inferência do agente. |
-| PCIe ocupado pelo AI Kit | O armazenamento é o **microSD**: as mitigações de escrita (retenção por tamanho, WAL comprimido, zram, noatime) são obrigatórias. |
+| PCIe ocupado pelo AI Kit | O armazenamento é o **microSD**: as mitigações de escrita (WAL comprimido, zram, noatime; retenção nos padrões do Prometheus nas rodadas avaliadas, limite por tamanho recomendado para operação contínua) são obrigatórias. |
 | Térmica | Use o **Active Cooler oficial**. Sem ventilação, inferência sustentada atinge throttling a ~85 °C. A telemetria registra temperatura e flags de throttling por interação. |
 
 ## 2. Preparação do sistema operacional
@@ -36,21 +36,25 @@ Monte o filesystem raiz com `noatime` (edite `/etc/fstab`, adicione `noatime`
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Override do systemd: KV-cache quantizado (metade da RAM de contexto),
-# um modelo/pedido por vez e modelo residente em RAM entre perguntas.
-sudo mkdir -p /etc/systemd/system/ollama.service.d
-sudo tee /etc/systemd/system/ollama.service.d/override.conf >/dev/null <<'EOF'
-[Service]
-Environment="OLLAMA_FLASH_ATTENTION=1"
-Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
-Environment="OLLAMA_NUM_PARALLEL=1"
-Environment="OLLAMA_MAX_LOADED_MODELS=1"
-Environment="OLLAMA_KEEP_ALIVE=-1"
-EOF
-sudo systemctl daemon-reload && sudo systemctl restart ollama
-
-# Modelo padrão do agente (Q4_K_M por padrão no Ollama, ~5-6 tokens/s de decode):
+# Modelo padrão do agente (Q4_K_M por padrão no Ollama):
 ollama pull qwen3:4b-instruct
+```
+
+**Configuração avaliada no artigo:** o serviço `ollama` rodou com os
+**padrões da instalação** (Ollama 0.32.6, sem drop-in de override e sem
+variáveis `OLLAMA_*` no ambiente do processo — ver `docs/ambiente_coletado.txt`).
+Tudo que importa para a inferência é enviado **por requisição** pelo agente
+(`core/config.py`): `qwen3:4b-instruct`, contexto 2048, geração máxima 512,
+4 threads, `keep_alive=-1`, *thinking* desativado, temperatura 0.
+
+**Recomendação opcional (não usada nas rodadas):** um override do systemd
+pode reduzir a RAM do KV-cache e impedir carregamentos concorrentes
+(`config/ollama.service.override.conf`). Se aplicado, **revalide com o
+protocolo** antes de comparar com os números do artigo:
+
+```bash
+sudo install -D -m 644 config/ollama.service.override.conf /etc/systemd/system/ollama.service.d/override.conf
+sudo systemctl daemon-reload && sudo systemctl restart ollama
 # Alternativa mais fiel, porém ~2x mais lenta (~2-3 tokens/s):
 # ollama pull qwen3:8b   (e ajuste OLLAMA_MODEL)
 ```
@@ -67,25 +71,37 @@ Notas:
   perguntas** (`perguntas-monitoramento-v2.md`, ver
   `TUTORIAL_PROTOCOLO_V2.md`) antes de comparar resultados.
 
-## 4. Prometheus local (instalação nativa já existente)
+## 4. Prometheus local (binário oficial em `/opt/prometheus`)
 
-Com o Prometheus já instalado e o `prometheus.yml` já apontando para as VMs,
-restam dois ajustes de edge na instalação nativa:
+Nas rodadas avaliadas o Prometheus rodou a partir do **tarball oficial
+`linux-arm64`** descompactado em `/opt/prometheus` — sem pacote da
+distribuição e sem serviço systemd. A configuração completa (com placeholders
+no lugar dos endereços) está em [`config/prometheus-edge.yml`](../config/prometheus-edge.yml)
+e a descrição do que foi avaliado em [`config/README.md`](../config/README.md).
 
-**a) Flags de inicialização** (protegem o microSD). Edite o serviço do
-systemd (`sudo systemctl edit prometheus` ou o arquivo de argumentos da sua
-instalação, ex.: `/etc/default/prometheus`) e acrescente ao comando:
+**a) Instalação e início.**
 
-```text
---storage.tsdb.retention.time=3d
---storage.tsdb.retention.size=1GB
---storage.tsdb.wal-compression
+```bash
+# baixe o tarball linux-arm64 em https://prometheus.io/download/ e descompacte:
+sudo mkdir -p /opt/prometheus && sudo tar -xzf prometheus-*.linux-arm64.tar.gz -C /opt/prometheus --strip-components=1
+sudo cp config/prometheus-edge.yml /opt/prometheus/prometheus.yml   # edite os placeholders
+cd /opt/prometheus && ./prometheus --config.file=prometheus.yml        # em tmux/screen/nohup
 ```
 
-Depois: `sudo systemctl daemon-reload && sudo systemctl restart prometheus`.
+*Configuração avaliada nas três rodadas do artigo* (Tabela III): **nenhuma
+flag** `--storage.tsdb.*` — retenção nos padrões do Prometheus (15 dias, sem
+limite de tamanho) e WAL comprimido, que é o comportamento padrão desde a
+versão 2.20.
 
-**b) Ajustes opcionais no seu `prometheus.yml`** (reduzem ingestão, RAM e
-escrita — depois de editar: `sudo systemctl restart prometheus`):
+*Recomendação pós-experimento* para operação contínua no microSD (não usada
+nas rodadas avaliadas — limita o crescimento do TSDB por tempo e tamanho):
+
+```text
+./prometheus --config.file=prometheus.yml --storage.tsdb.retention.time=3d --storage.tsdb.retention.size=1GB
+```
+
+**b) O que o `prometheus.yml` de edge muda** (usado nas rodadas; reduz
+ingestão, RAM e escrita — depois de editar, reinicie o processo):
 
 - `scrape_interval: 30s` no bloco `global` (metade da ingestão/WAL);
 - em cada job, armazenar somente as famílias de métricas que o agente
@@ -115,8 +131,8 @@ O que a configuração de edge muda em relação ao experimento desktop:
 | Parâmetro | Desktop (artigo) | Edge (Pi 5) | Motivo |
 | --- | --- | --- | --- |
 | `scrape_interval` | 15s | 30s | Metade da ingestão/WAL; a janela de agregação de 5 min das consultas não muda. |
-| Retenção | padrão (15d) | 3d **e** 1 GB | O limite por tamanho protege o microSD. |
-| WAL | sem compressão | `--storage.tsdb.wal-compression` | Menos bytes escritos. |
+| Retenção | padrão (15d) | padrão (15d, sem limite) nas rodadas avaliadas; 3d **e** 1 GB como recomendação pós-experimento | O limite por tamanho protege o microSD em operação contínua. |
+| WAL | padrão | comprimido (padrão do Prometheus ≥ 2.20; nenhuma flag passada) | Menos bytes escritos no microSD. |
 | Métricas armazenadas | todas | somente as famílias que o agente consulta (`action: keep`) | O cAdvisor exporta centenas de séries por container; cortar na origem poupa RAM e disco. |
 | Passo das consultas | 15s | 30s (acompanha o scrape) | Amostras alinhadas à coleta real. |
 | `rate()` interno | `[1m]` | `[2m]` (`RATE_WINDOW`) | `rate` precisa de ≥2 amostras na janela; com scrape de 30s, 2m dá margem. |
@@ -144,8 +160,8 @@ pip freeze > requirements.lock.txt   # congele o ambiente validado
 python main.py
 ```
 
-Os valores padrão do agente já são os do Pi (`qwen3:4b`, Prometheus em
-`localhost:9090`, telemetria ligada) — não é preciso definir variável de
+Os valores padrão do agente já são os do Pi (`qwen3:4b-instruct`, Prometheus
+em `localhost:9090`, telemetria ligada) — não é preciso definir variável de
 ambiente nenhuma. Para mudar algo pontual, exporte antes de rodar (a tabela
 completa de variáveis está no README), por exemplo:
 
@@ -156,7 +172,8 @@ export OLLAMA_NUM_THREAD=4
 ## 6. Telemetria do experimento
 
 Cada interação gera **uma linha JSON** em `resultados/experimentos.jsonl`
-(configurável via `TELEMETRY_FILE`), contendo:
+(configurável via `TELEMETRY_FILE`; `scripts/rodar_protocolo.py` grava cada
+rodada do protocolo em `resultados/rodada_N.jsonl`), contendo:
 
 - pergunta, resposta, erro (se houver) e latência fim-a-fim;
 - ferramentas acionadas, parâmetros e duração de cada uma (**Acc_t** auditável);
@@ -164,7 +181,9 @@ Cada interação gera **uma linha JSON** em `resultados/experimentos.jsonl`
   não passam mais pelo contexto do LLM, mas ficam registrados aqui);
 - por chamada de LLM: `prompt_eval_count`, `eval_count` e durações, dos quais
   derivam **prefill tokens/s** e **decode tokens/s**;
-- temperatura da CPU e flags de throttling do Pi.
+- temperatura da CPU e flags de throttling do Pi;
+- flags da guarda de fidelidade (`retentativa_guarda`, `guarda_recuperou`,
+  `aviso_fidelidade_emitido`), gravadas pela CLI no ponto de ativação.
 
 Para consolidar:
 

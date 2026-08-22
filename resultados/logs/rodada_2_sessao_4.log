@@ -1,0 +1,362 @@
+2026-08-21 21:37:31,220 INFO agent.engine: Executor do agente inicializado com sucesso (modelo=qwen3:4b-instruct).
+=====================================================
+Agente Iniciado!
+Modelo local: qwen3:4b-instruct
+Monitorando Prometheus em: http://localhost:9090
+Telemetria do experimento: <PROJETO>/resultados/rodada_2.jsonl
+Digite 'sair' para encerrar.
+=====================================================
+
+Você: 
+Agente: Máquina do site:
+Na VM:
+Estado geral: ok.
+CPU: nível=ok, média=11.7%, pico=12.0%
+Memória: nível=ok, média=25.9%, pico=25.9%
+Disco: nível=ok, média=74.4%, pico=74.4%
+Rede: nível=ok, RX média=6.14 KB/s, TX média=3.22 KB/s, erros pico=0.000 errs/s
+
+Você: 
+Agente: Máquina do site:
+Na VM:
+Estado geral: ok.
+Memória: nível=ok, média=25.9%, pico=25.9%
+
+Máquina do testes:
+Na VM:
+Estado geral: ok.
+Memória: nível=ok, média=74.6%, pico=75.0%
+
+Você: 
+Agente: Máquina do site:
+Na VM:
+Estado geral: ok.
+Disco: nível=ok, média=74.4%, pico=74.4%
+
+Você: 2026-08-21 21:41:21,850 ERROR __main__: Falha ao processar a pergunta.
+Traceback (most recent call last):
+  File "<PROJETO>/main.py", line 103, in executar_loop
+    resposta = await executor.ainvoke({"input": pergunta}, config=config)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/chains/base.py", line 222, in ainvoke
+    await self._acall(inputs, run_manager=run_manager)
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/agents/agent.py", line 1646, in _acall
+    next_step_output = await self._atake_next_step(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/agents/agent.py", line 1428, in _atake_next_step
+    [
+    ^
+    ...<8 lines>...
+    ],
+    ^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/agents/agent.py", line 1511, in _aiter_next_step
+    result = await asyncio.gather(
+             ^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    )
+    ^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/agents/agent.py", line 1549, in _aperform_agent_action
+    observation = await tool.arun(
+                  ^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/tools/base.py", line 1264, in arun
+    raise error_to_raise
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/tools/base.py", line 1218, in arun
+    tool_args, tool_kwargs = self._to_args_and_kwargs(tool_input, tool_call_id)
+                             ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/tools/base.py", line 995, in _to_args_and_kwargs
+    tool_input = self._parse_input(tool_input, tool_call_id)
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/tools/base.py", line 836, in _parse_input
+    result_v2 = input_args.model_validate(tool_input)
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/pydantic/main.py", line 732, in model_validate
+    return cls.__pydantic_validator__.validate_python(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        obj,
+        ^^^^
+    ...<5 lines>...
+        by_name=by_name,
+        ^^^^^^^^^^^^^^^^
+    )
+    ^
+pydantic_core._pydantic_core.ValidationError: 1 validation error for ArgsDetectarAnomalias
+alvo
+  Input should be a valid string [type=string_type, input_value={'site': 'site', 'testes': 'testes'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_type
+
+[Erro interno do agente] 1 validation error for ArgsDetectarAnomalias
+alvo
+  Input should be a valid string [type=string_type, input_value={'site': 'site', 'testes': 'testes'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_type
+
+Você: 
+Agente: Máquina do site:
+Na VM:
+Estado geral: ok.
+Disco: nível=ok, média=74.4%, pico=74.4%
+
+Você: 
+Agente: CPU: nível=ok, média=11.6%, pico=11.7%
+
+Você: 
+Agente: Máquina do testes:
+Na VM:
+Estado geral: ok.
+Memória: nível=ok, média=74.3%, pico=74.8%
+
+Você: 
+Agente: Disco: nível=ok, média=74.4%, pico=74.4%
+
+Você: 
+Agente: Máquina do testes:
+Na VM:
+Estado geral: ok.
+Rede: nível=ok, RX média=27.67 KB/s, TX média=19.13 KB/s, erros pico=0.000 errs/s
+
+Você: 
+Agente: Nenhuma anomalia detectada em containers dos testes.
+
+Você: 
+Agente: - c2ai-kafka: 0.220 core
+
+Você: 
+Agente: Máquina do site:
+Nos containers:
+Foram encontrados 1 containers.
+Nenhum container inativo foi detectado.
+Nenhum container com estado desconhecido foi detectado.
+
+Saúde de todos os containers:
+- cadvisor | status=up | CPU pico=0.191 core, média=0.190 core | Memória pico=120.90 MB, média=117.54 MB
+
+Média geral:
+- CPU: 0.190 core
+- Memória: 117.54 MB
+
+Atraso desde a última observação: ~28.00 s
+
+Você: 
+Agente: Máquina do testes:
+Nos containers:
+Foram encontrados 1 containers.
+Nenhum container inativo foi detectado.
+
+Top CPU por pico:
+- c2ai-kafka: 0.214 core
+
+Top memória por pico:
+- c2ai-kafka: 1.08 GB
+
+Média geral:
+- CPU: 0.192 core
+- Memória: 1.03 GB
+
+Atraso desde a última observação: ~28.00 s
+
+Você: 
+Agente: Máquina do testes:
+Na VM:
+Estado geral: ok.
+CPU: nível=ok, média=13.7%, pico=14.3%
+Memória: nível=ok, média=74.3%, pico=74.5%
+Disco: nível=ok, média=69.1%, pico=69.1%
+Rede: nível=ok, RX média=27.64 KB/s, TX média=19.13 KB/s, erros pico=0.000 errs/s
+
+Você: 2026-08-21 21:50:46,704 INFO agent.tools: Alvo ausente ou inválido: Alvo 'c2ai-nodered' inválido. Opções válidas: site, testes.
+
+Agente: Qual ambiente você deseja consultar: site ou testes?
+
+Você: 2026-08-21 21:51:23,951 INFO agent.tools: Alvo ausente ou inválido: Alvo 'true' inválido. Opções válidas: site, testes.
+
+Agente: Qual ambiente você deseja consultar: site ou testes?
+
+Você: 2026-08-21 21:51:57,639 INFO agent.tools: Alvo ausente ou inválido: Alvo 'gitlab-runner' inválido. Opções válidas: site, testes.
+
+Agente: Qual ambiente você deseja consultar: site ou testes?
+
+Você: 
+Agente: Nenhum container encontrado para o filtro informado.
+
+Você: 
+Agente: Nenhum container encontrado para o filtro informado.
+
+Você: 
+Agente: Nenhum container encontrado para o filtro informado.
+
+Você: 
+Agente: Consulta PromQL:
+Estado da coleta: success.
+resultType=vector
+séries retornadas=2
+- {__name__="node_memory_MemAvailable_bytes", ambiente="vm_testes", instance="localhost:29101", job="vm_testes", os="linux"}: 2113568768
+- {__name__="node_memory_MemAvailable_bytes", ambiente="vm_site", instance="localhost:19100", job="vm_site_conect2ai", os="linux"}: 3039670272
+
+Você: 
+Agente: Consulta PromQL:
+Estado da coleta: success.
+resultType=vector
+séries retornadas=4
+- {__name__="up", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 1
+- {__name__="up", instance="localhost:28080", job="containers_vm_testes"}: 1
+- {__name__="up", ambiente="vm_testes", instance="localhost:29101", job="vm_testes", os="linux"}: 1
+- {__name__="up", ambiente="vm_site", instance="localhost:19100", job="vm_site_conect2ai", os="linux"}: 1
+
+Você: 2026-08-21 21:56:17,411 ERROR __main__: Falha ao processar a pergunta.
+Traceback (most recent call last):
+  File "<PROJETO>/main.py", line 103, in executar_loop
+    resposta = await executor.ainvoke({"input": pergunta}, config=config)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/chains/base.py", line 222, in ainvoke
+    await self._acall(inputs, run_manager=run_manager)
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/agents/agent.py", line 1646, in _acall
+    next_step_output = await self._atake_next_step(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/agents/agent.py", line 1428, in _atake_next_step
+    [
+    ^
+    ...<8 lines>...
+    ],
+    ^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/agents/agent.py", line 1456, in _aiter_next_step
+    output = await self._action_agent.aplan(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_classic/agents/agent.py", line 593, in aplan
+    async for chunk in self.runnable.astream(
+    ...<6 lines>...
+            final_output += chunk
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 3848, in astream
+    async for chunk in self.atransform(input_aiter(), config, **kwargs):
+        yield chunk
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 3830, in atransform
+    async for chunk in self._atransform_stream_with_config(
+    ...<5 lines>...
+        yield chunk
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 2659, in _atransform_stream_with_config
+    chunk = await coro_with_context(anext(iterator), context)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 3797, in _atransform
+    async for output in final_pipeline:
+        yield output
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 1818, in atransform
+    async for ichunk in input:
+    ...<14 lines>...
+                final = ichunk
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 6358, in atransform
+    async for item in self.bound.atransform(
+    ...<4 lines>...
+        yield item
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/runnables/base.py", line 1836, in atransform
+    async for output in self.astream(final, config, **kwargs):
+        yield output
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_core/language_models/chat_models.py", line 916, in astream
+    async for chunk in self._astream(
+    ...<23 lines>...
+        yielded = True
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_ollama/chat_models.py", line 1373, in _astream
+    async for chunk in self._aiterate_over_stream(messages, stop, **kwargs):
+    ...<5 lines>...
+        yield chunk
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_ollama/chat_models.py", line 1306, in _aiterate_over_stream
+    async for stream_resp in self._acreate_chat_stream(messages, stop, **kwargs):
+    ...<57 lines>...
+            yield chunk
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/langchain_ollama/chat_models.py", line 1102, in _acreate_chat_stream
+    async for part in await self._async_client.chat(**chat_params):
+        yield part
+  File "<PROJETO>/.venv/lib/python3.13/site-packages/ollama/_client.py", line 782, in inner
+    raise ResponseError(e.response.text, e.response.status_code) from None
+ollama._types.ResponseError: {"error":{"code":400,"message":"request (2082 tokens) exceeds the available context size (2048 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":2082,"n_ctx":2048}} (status code: 400)
+
+[Erro interno do agente] {"error":{"code":400,"message":"request (2082 tokens) exceeds the available context size (2048 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":2082,"n_ctx":2048}} (status code: 400)
+
+Você: 
+Agente: Consulta PromQL:
+Estado da coleta: success.
+resultType=vector
+séries retornadas=132
+- {__name__="container_memory_usage_bytes", id="/", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 3331375104
+- {__name__="container_memory_usage_bytes", id="/init.scope", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 24625152
+- {__name__="container_memory_usage_bytes", id="/system.slice", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 2943852544
+- {__name__="container_memory_usage_bytes", id="/system.slice/ModemManager.service", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 3387392
+- {__name__="container_memory_usage_bytes", id="/system.slice/NetworkManager.service", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 6422528
+- {__name__="container_memory_usage_bytes", id="/system.slice/cloud-final.service", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 90112
+- {__name__="container_memory_usage_bytes", id="/system.slice/cloud-init.service", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 360448
+- {__name__="container_memory_usage_bytes", id="/system.slice/cockpit.socket", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 12288
+- {__name__="container_memory_usage_bytes", id="/system.slice/containerd.service", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 52875264
+- {__name__="container_memory_usage_bytes", id="/system.slice/cron.service", instance="localhost:18080", job="containers_vm_site_conect2ai"}: 10752000
+
+Você: 
+Agente: Máquina do site:
+Na VM:
+Estado geral: ok.
+CPU: nível=ok, média=11.9%, pico=12.1%
+Memória: nível=ok, média=25.9%, pico=25.9%
+Disco: nível=ok, média=74.4%, pico=74.4%
+Rede: nível=ok, RX média=6.14 KB/s, TX média=3.22 KB/s, erros pico=0.000 errs/s
+
+Você: 
+Agente: Máquina do testes:
+Nos containers:
+Foram encontrados 11 containers.
+Nenhum container inativo foi detectado.
+Nenhum container com estado desconhecido foi detectado.
+
+Saúde de todos os containers:
+- c2ai-api | status=up | CPU pico=0.002 core, média=0.002 core | Memória pico=140.27 MB, média=140.27 MB
+- c2ai-blockchain | status=up | CPU pico=0.013 core, média=0.013 core | Memória pico=21.21 MB, média=21.21 MB
+- c2ai-kafka | status=up | CPU pico=0.212 core, média=0.188 core | Memória pico=1.08 GB, média=1.02 GB
+- c2ai-nodered | status=up | CPU pico=0.024 core, média=0.023 core | Memória pico=143.40 MB, média=143.32 MB
+- c2ai-redis | status=up | CPU pico=0.014 core, média=0.014 core | Memória pico=6.48 MB, média=6.37 MB
+- c2ai-timescaledb | status=up | CPU pico=0.004 core, média=0.004 core | Memória pico=281.70 MB, média=281.70 MB
+- cadvisor | status=up | CPU pico=0.089 core, média=0.086 core | Memória pico=104.03 MB, média=101.81 MB
+- gitlab-runner | status=up | CPU pico=0.001 core, média=0.001 core | Memória pico=26.63 MB, média=26.63 MB
+- plaforedu-db | status=up | CPU pico=0.000 core, média=0.000 core |
+
+Você: 
+Agente: Máquina do testes:
+Nos containers:
+Foram encontrados 11 containers.
+Nenhum container inativo foi detectado.
+Nenhum container com estado desconhecido foi detectado.
+
+Saúde de todos os containers:
+- c2ai-api | status=up | CPU pico=0.002 core, média=0.002 core | Memória pico=140.27 MB, média=140.27 MB
+- c2ai-blockchain | status=up | CPU pico=0.013 core, média=0.013 core | Memória pico=21.33 MB, média=21.23 MB
+- c2ai-kafka | status=up | CPU pico=0.208 core, média=0.187 core | Memória pico=1.02 GB, média=1.02 GB
+- c2ai-nodered | status=up | CPU pico=0.025 core, média=0.022 core | Memória pico=143.41 MB, média=143.32 MB
+- c2ai-redis | status=up | CPU pico=0.014 core, média=0.014 core | Memória pico=6.48 MB, média=6.38 MB
+- c2ai-timescaledb | status=up | CPU pico=0.004 core, média=0.004 core | Memória pico=281.70 MB, média=281.70 MB
+- cadvisor | status=up | CPU pico=0.088 core, média=0.086 core | Memória pico=105.33 MB, média=101.88 MB
+- gitlab-runner | status=up | CPU pico=0.001 core, média=0.001 core | Memória pico=26.75 MB, média=26.64 MB
+- plaforedu-db | status=up | CPU pico=0.000 core, média=0.000 core |
+
+Você: 2026-08-21 22:14:59,467 INFO agent.tools: Alvo ausente ou inválido: Alvo 'true' inválido. Opções válidas: site, testes.
+
+Agente: Qual ambiente você deseja consultar: site ou testes?
+
+Você: 
+Agente: Nenhuma anomalia detectada.
+
+Você: 
+Agente: Nenhuma anomalia detectada.
+
+Você: 
+Agente: Nível: ok, média = 11.6%, pico = 11.7%.
+
+Você: 
+Agente: Máquina do site:
+Na VM:
+Estado geral: ok.
+Memória: nível=ok, média=25.9%, pico=26.0%
+
+Você: Encerrando o agente. Até logo!

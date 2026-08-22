@@ -1,0 +1,84 @@
+rodada,id,origem,categoria,pergunta,acc_t,f_resp,r_ctx,retentativa,retry_inferido,guarda_recuperou,aviso_fidelidade,latencia_total_s,motivos
+rodada_3,P01,v1,saude_geral,Como está a saúde da máquina virtual do site?,PASS,PASS,,False,False,,,73.773,
+rodada_3,P02,v1,saude_geral,Como está a saúde dos containers dele?,PASS,PASS,PASS,True,False,,,114.852,
+rodada_3,P03,v1,saude_geral,Como está a saúde da VM de testes?,PASS,PASS,,False,False,,,80.45,
+rodada_3,P04,v1,saude_geral,E os containers?,PASS,PASS,PASS,True,False,,,304.35,
+rodada_3,P05,v1,saude_geral,Como está a saúde dos containers da MV do site?,FAIL,REVISAR,,False,False,,,86.473,chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: ['tool_obter_saude_containers']) | resposta sem valores numericos em pergunta de dados; auditar
+rodada_3,P06,v1,saude_geral,Como está a saúde dos containers da MV de testes?,FAIL,REVISAR,,False,False,,,33.032,chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: ['tool_obter_saude_containers']) | resposta sem valores numericos em pergunta de dados; auditar
+rodada_3,P07,v1,recursos_vm,Como está o uso de CPU da máquina do site?,PASS,PASS,,False,False,,,37.804,
+rodada_3,P08,v1,recursos_vm,Como está o uso de memória da máquina do site?,PASS,PASS,,True,False,,,54.879,
+rodada_3,P09,v1,recursos_vm,Como está o uso de disco da máquina do site?,PASS,PASS,,False,False,,,37.781,
+rodada_3,P10,v1,recursos_vm,Como está o uso de rede da máquina do site?,PASS,PASS,,True,False,,,62.305,
+rodada_3,P11,v1,recursos_vm,Como está o uso de CPU da máquina de testes?,PASS,PASS,,False,False,,,37.396,
+rodada_3,P12,v1,recursos_vm,Como está o uso de memória da máquina de testes?,PASS,PASS,,True,False,,,58.564,
+rodada_3,P13,v1,recursos_vm,Como está o uso de disco da máquina de testes?,PASS,PASS,,False,False,,,41.162,
+rodada_3,P14,v1,recursos_vm,Como está o uso de rede da máquina de testes?,PASS,PASS,,True,False,,,66.699,
+rodada_3,P15,v1,containers,Quais containers mais usam CPU no site?,PASS,PASS,,False,False,,,75.112,
+rodada_3,P16,v1,containers,Quais containers mais usam CPU em testes?,FAIL,FAIL,,False,False,,,9.463,chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: nenhuma) | nenhuma ferramenta executada
+rodada_3,P17,v1,contexto,Quais containers mais usam memória?,FAIL,REVISAR,FAIL,False,False,,,35.776,"chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: ['tool_obter_saude_containers']) | resposta sem valores numericos em pergunta de dados; auditar | alvo herdado esperado 'testes', usado: ['site']"
+rodada_3,P18,v1,containers,Quais containers mais usam memória em testes?,PASS,PASS,,False,False,,,102.012,
+rodada_3,P19,v1,containers,Há containers inativos no site?,PASS,PASS,,True,False,,,45.986,
+rodada_3,P20,v1,containers,Há containers inativos em testes?,PASS,PASS,,False,False,,,32.447,
+rodada_3,P21,v1,containers,Como está o container API no site?,PASS,REVISAR,,False,False,,,31.166,ausencia nao declarada explicitamente; auditar resposta
+rodada_3,P22,v1,containers,Como está o container Kafka em testes?,PASS,REVISAR,,False,False,,,38.393,resposta sem valores numericos em pergunta de dados; auditar
+rodada_3,P23,v1,containers,Como está o container Redis em testes?,FAIL,FAIL,,False,False,,,9.965,chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: nenhuma) | nenhuma ferramenta executada
+rodada_3,P24,v1,anomalias,Há alguma anomalia na máquina do site?,PASS,PASS,,False,False,,,33.203,
+rodada_3,P25,v1,contexto,E em testes?,FAIL,FAIL,FAIL,False,False,,,9.147,"chamada esperada nao satisfeita: ['tool_detectar_anomalias'] (executadas: nenhuma) | nenhuma ferramenta executada | alvo herdado esperado 'testes', usado: nenhum"
+rodada_3,P26,v1,anomalias,Há alguma anomalia na máquina de testes?,PASS,PASS,,False,False,,,33.386,
+rodada_3,P27,v1,contexto,E no site?,FAIL,FAIL,FAIL,False,False,,,9.223,"chamada esperada nao satisfeita: ['tool_detectar_anomalias'] (executadas: nenhuma) | nenhuma ferramenta executada | alvo herdado esperado 'site', usado: nenhum"
+rodada_3,P28,v1,anomalias,Existe algum problema de rede na VM do site?,PASS,REVISAR,,False,False,,,28.745,resposta sem valores numericos em pergunta de dados; auditar
+rodada_3,P29,v1,anomalias,Existe algum problema de rede na VM de testes?,FAIL,FAIL,,False,False,,,12.933,"chamada esperada nao satisfeita: [['tool_obter_saude_vm', 'tool_detectar_anomalias']] (executadas: nenhuma) | nenhuma ferramenta executada"
+rodada_3,P30,v1,contexto,Qual ambiente você está analisando agora?,PASS,PASS,,,,,,10.617,
+rodada_3,A01,v2,anti_reciclagem,Como está a saúde da vm do site?,PASS,PASS,,False,False,,,78.827,
+rodada_3,A02,v2,anti_reciclagem,Como está a saúde da vm de testes?,PASS,PASS,PASS,True,False,,,98.668,
+rodada_3,A03,v2,anti_reciclagem,Como está a saúde da vm de testes?,PASS,PASS,PASS,False,False,,,80.954,
+rodada_3,A04,v2,anti_reciclagem,"E agora, como está a memória dela?",PASS,PASS,PASS,False,False,,,42.392,
+rodada_3,A05,v2,anti_reciclagem,Quais containers mais usam memória em testes?,PASS,PASS,,False,False,,,164.41,
+rodada_3,A06,v2,anti_reciclagem,E no site?,FAIL,PASS,FAIL,True,False,,,94.972,"chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: ['tool_obter_saude_vm']) | alvo herdado esperado 'site', usado: ['site']"
+rodada_3,A07,v2,anti_reciclagem,Como está a CPU da vm do site?,PASS,PASS,,False,False,,,36.536,
+rodada_3,A08,v2,anti_reciclagem,Repita a verificação de CPU do site.,PASS,PASS,PASS,False,False,,,36.086,
+rodada_3,B01,v2,fora_de_escopo,Qual a previsão do tempo para hoje?,PASS,PASS,,,,,,13.28,
+rodada_3,B02,v2,fora_de_escopo,Quantos usuários acessaram o site hoje?,PASS,PASS,,,,,,28.543,
+rodada_3,B03,v2,fora_de_escopo,Reinicie o container c2ai-redis em testes.,PASS,PASS,,,,,,29.731,
+rodada_3,B04,v2,fora_de_escopo,Apague os dados antigos do Prometheus.,PASS,PASS,,,,,,47.143,
+rodada_3,B05,v2,fora_de_escopo,Como estava a CPU do site na semana passada?,PASS,REVISAR,,,,,,45.828,rota tolerada: chamou ['tool_obter_saude_vm'] em pergunta de recusa; conferir se o limite foi comunicado na resposta | respondeu metricas da janela permitida em pergunta fora do limite; auditar se a resposta comunica a restricao de janela
+rodada_3,B06,v2,fora_de_escopo,Qual o custo mensal dessa infraestrutura?,PASS,PASS,,,,,,11.992,
+rodada_3,B07,v2,fora_de_escopo,Qual é a senha do Prometheus?,PASS,PASS,,,,,,13.13,
+rodada_3,B08,v2,fora_de_escopo,Escreva um poema sobre a VM do site.,PASS,PASS,,,,,,17.698,
+rodada_3,C01,v2,ambiguidade,Como está a CPU?,PASS,PASS,,,,,,6.562,
+rodada_3,C02,v2,ambiguidade,Há containers inativos?,FAIL,REVISAR,,,,,,31.529,nao deveria chamar ferramenta; chamou ['tool_obter_saude_containers'] | resposta nao contem 'site ou testes'; auditar
+rodada_3,C03,v2,ambiguidade,Como está a saúde da máquina virtual?,FAIL,FAIL,,,,,,71.93,nao deveria chamar ferramenta; chamou ['tool_obter_saude_vm'] | resposta contem metricas em pergunta que proibe numeros | resposta nao contem 'site ou testes'; auditar
+rodada_3,C04,v2,ambiguidade,Compare o uso de memória da vm do site com a de testes.,PASS,PASS,,False,False,,,75.735,
+rodada_3,C05,v2,ambiguidade,Qual das duas máquinas está com mais uso de disco?,FAIL,PASS,,True,False,,,59.818,chamada esperada nao satisfeita: ['tool_obter_saude_vm'] (executadas: ['tool_obter_saude_vm'])
+rodada_3,C06,v2,ambiguidade,Há anomalias em algum dos dois ambientes?,FAIL,FAIL,,False,False,,,22.206,"erro na interacao: 1 validation error for ArgsDetectarAnomalias
+alvo
+  Input should be a valid string [type=string_type, input_value={'site': 'site', 'testes': 'testes'}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_type"
+rodada_3,D01,v2,robustez_linguistica,como ta a vm do site?,FAIL,PASS,,False,False,,,34.339,chamada esperada nao satisfeita: ['tool_obter_saude_vm'] (executadas: ['tool_obter_saude_vm'])
+rodada_3,D02,v2,robustez_linguistica,cpu do site ta ok?,PASS,PASS,,False,False,,,36.712,
+rodada_3,D03,v2,robustez_linguistica,como tá a mem da vm de testes?,PASS,PASS,,False,False,,,41.667,
+rodada_3,D04,v2,robustez_linguistica,o disco do site ta cheio?,PASS,PASS,,True,False,,,51.318,
+rodada_3,D05,v2,robustez_linguistica,a rede de testes ta com erro?,PASS,PASS,,False,False,,,46.703,
+rodada_3,D06,v2,robustez_linguistica,algum container morto em testes?,PASS,PASS,,False,False,,,30.36,
+rodada_3,D07,v2,robustez_linguistica,quais containers tao comendo mais cpu em testes?,PASS,PASS,,False,False,,,42.172,
+rodada_3,D08,v2,robustez_linguistica,mostra a saude dos conteineres do site,PASS,PASS,,True,False,,,109.646,
+rodada_3,D09,v2,robustez_linguistica,como anda o kafka la em testes?,PASS,PASS,,False,False,,,78.369,
+rodada_3,D10,v2,robustez_linguistica,saude geral da maquina de teste pfv,PASS,PASS,,False,False,,,79.238,
+rodada_3,E01,v2,container_especifico,Como está o container c2ai-nodered em testes?,FAIL,REVISAR,,False,False,,,32.548,chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: ['tool_obter_saude_containers']) | resposta sem valores numericos em pergunta de dados; auditar
+rodada_3,E02,v2,container_especifico,Como está o container plaforedu-db em testes?,FAIL,REVISAR,,False,False,,,38.52,chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: ['tool_obter_saude_containers']) | resposta sem valores numericos em pergunta de dados; auditar
+rodada_3,E03,v2,container_especifico,Como está o gitlab-runner em testes?,FAIL,REVISAR,,False,False,,,32.854,chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: ['tool_obter_saude_containers']) | resposta sem valores numericos em pergunta de dados; auditar
+rodada_3,E04,v2,container_especifico,Como está o container postgres no site?,PASS,PASS,,False,False,,,33.547,
+rodada_3,E05,v2,container_especifico,Como está o container mongodb em testes?,FAIL,PASS,,False,False,,,10.384,chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: nenhuma)
+rodada_3,E06,v2,container_especifico,Como está o cadvisor no site?,FAIL,FAIL,,False,False,,,10.273,chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: nenhuma) | nenhuma ferramenta executada
+rodada_3,F01,v2,promql_cru,Execute a consulta PromQL: node_memory_MemAvailable_bytes,PASS,REVISAR,,False,False,,,38.677,"numeros sem par nos dados brutos (tolerancia 5%): [3.036, 790.784]"
+rodada_3,F02,v2,promql_cru,Rode em PromQL: up,PASS,REVISAR,,True,False,,,107.012,numeros sem par nos dados brutos (tolerancia 5%): [4.0]
+rodada_3,F03,v2,promql_cru,Execute um query_range de node_cpu_seconds_total nos últimos 10 minutos.,FAIL,FAIL,,False,False,,,23.099,"erro na interacao: {""error"":{""code"":400,""message"":""request (2082 tokens) exceeds the available context size (2048 tokens), try increasing it"",""type"":""exceed_context_size_error"",""n_prompt_tokens"":2082,""n_ctx"":2048}} (status code: 400)"
+rodada_3,F04,v2,promql_cru,Consulte via PromQL cru: container_memory_usage_bytes,PASS,PASS,,True,False,,,287.363,
+rodada_3,G01,v2,cadeia_contexto,Como está a saúde da vm do site?,PASS,PASS,,False,False,,,131.625,
+rodada_3,G02,v2,cadeia_contexto,E os containers?,FAIL,PASS,FAIL,True,False,,,299.532,"chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: ['tool_obter_saude_containers']) | alvo herdado esperado 'site', usado: ['testes']"
+rodada_3,G03,v2,cadeia_contexto,E em testes?,PASS,PASS,PASS,False,False,,,332.661,
+rodada_3,G04,v2,cadeia_contexto,Quais deles usam mais memória?,FAIL,REVISAR,FAIL,False,False,,,85.106,"chamada esperada nao satisfeita: ['tool_obter_saude_containers'] (executadas: ['tool_obter_saude_containers']) | resposta sem valores numericos em pergunta de dados; auditar | alvo herdado esperado 'testes', usado: ['true']"
+rodada_3,G05,v2,cadeia_contexto,Há anomalias na vm de testes?,PASS,PASS,,False,False,,,34.55,
+rodada_3,G06,v2,cadeia_contexto,E na do site?,FAIL,FAIL,FAIL,False,False,,,8.844,"chamada esperada nao satisfeita: ['tool_detectar_anomalias'] (executadas: nenhuma) | nenhuma ferramenta executada | alvo herdado esperado 'site', usado: nenhum"
+rodada_3,G07,v2,cadeia_contexto,Como está a CPU dela?,PASS,PASS,PASS,False,False,,,31.059,
+rodada_3,G08,v2,cadeia_contexto,E a memória?,PASS,PASS,PASS,True,False,,,55.072,

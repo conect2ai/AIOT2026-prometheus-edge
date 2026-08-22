@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline:
+    name: software tests + artifact checks (no network, no Ollama)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Os testes usam os stubs de tests/stubs/ quando httpx/langchain nao
+      # estao instalados: nenhuma dependencia externa e necessaria aqui.
+      - name: Testes funcionais (componentes do software)
+        run: python tests/test_porte_edge.py
+      - name: Gabarito v2 e JSON valido
+        run: python -m json.tool scripts/gabarito_v2.json > /dev/null
+      - name: Avaliador sobre os resultados publicados (3 x 80 interacoes)
+        run: python scripts/avaliar_protocolo.py --csv /tmp/avaliacao_ci.csv
+      - name: Reproducao das tabelas do artigo
+        run: python scripts/reproduzir_tabelas.py --saida /tmp/resumo_ci.csv
