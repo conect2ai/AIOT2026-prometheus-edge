@@ -7,6 +7,10 @@
 
 # Grounded Tool Calling for Edge AIoT Observability: A Local SLM-Prometheus Deployment
 
+<p align="center">
+  <a href="https://github.com/conect2ai/AIOT2026-prometheus-edge/actions/workflows/tests.yml"><img src="https://github.com/conect2ai/AIOT2026-prometheus-edge/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
+</p>
+
 ### Authors: [Erick Justino](https://github.com/erickjustino), Mateus Araujo, [Marianne Silva](https://github.com/MarianneDiniz), [Dennis Brandão](https://scholar.google.com.br/citations?user=OxSKwvEAAAAJ&hl=pt-BR&authuser=1&oi=ao), Emiliano Sisinni, Paolo Ferrari and [Ivanovitch Silva](https://github.com/ivanovitchm)
 
 This repository contains the implementation, the evaluation protocol and the
